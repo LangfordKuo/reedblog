@@ -1,13 +1,17 @@
 import { clearToken, getToken } from "./auth"
 import type {
+  ActiveTheme,
   ArchiveMonth,
   AuthResult,
   Category,
   CommentAdmin,
   CommentPub,
   CommentStatus,
+  FrontendInjections,
   InstallPayload,
+  Items,
   Page,
+  PluginInfo,
   PostAdmin,
   PostDetail,
   PostPublic,
@@ -15,6 +19,7 @@ import type {
   PostStatus,
   SiteInfo,
   Tag,
+  ThemeInfo,
 } from "./types"
 
 export class ApiError extends Error {
@@ -38,23 +43,8 @@ export function errorMessage(e: unknown, codeMap?: Record<string, string>): stri
   return "未知错误"
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const headers: Record<string, string> = {}
-  if (body !== undefined) headers["Content-Type"] = "application/json"
-  const token = getToken()
-  if (token) headers["Authorization"] = `Bearer ${token}`
-
-  let res: Response
-  try {
-    res = await fetch(`/api${path}`, {
-      method,
-      headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    })
-  } catch {
-    throw new ApiError(0, "network_error", "无法连接服务器，请确认后端服务已启动")
-  }
-
+/** 统一处理响应：204 → undefined，解析 JSON，非 2xx 抛 ApiError */
+async function toResult<T>(res: Response): Promise<T> {
   if (res.status === 204) return undefined as T
 
   let data: unknown = null
@@ -75,6 +65,42 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   }
 
   return data as T
+}
+
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = {}
+  if (body !== undefined) headers["Content-Type"] = "application/json"
+  const token = getToken()
+  if (token) headers["Authorization"] = `Bearer ${token}`
+
+  let res: Response
+  try {
+    res = await fetch(`/api${path}`, {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    })
+  } catch {
+    throw new ApiError(0, "network_error", "无法连接服务器，请确认后端服务已启动")
+  }
+
+  return toResult<T>(res)
+}
+
+/** multipart/form-data 上传（插件/主题 zip）；不手动设 Content-Type，交给浏览器带 boundary */
+async function requestForm<T>(method: string, path: string, form: FormData): Promise<T> {
+  const headers: Record<string, string> = {}
+  const token = getToken()
+  if (token) headers["Authorization"] = `Bearer ${token}`
+
+  let res: Response
+  try {
+    res = await fetch(`/api${path}`, { method, headers, body: form })
+  } catch {
+    throw new ApiError(0, "network_error", "无法连接服务器，请确认后端服务已启动")
+  }
+
+  return toResult<T>(res)
 }
 
 function qs(params: object): string {
@@ -125,6 +151,10 @@ export const api = {
   categories: () => request<Category[]>("GET", "/categories"),
   archive: () => request<ArchiveMonth[]>("GET", "/archive"),
 
+  // 扩展系统公开接口（未安装门禁白名单内，无需鉴权）
+  themeActive: () => request<ActiveTheme>("GET", "/themes/active"),
+  frontendInjections: () => request<FrontendInjections>("GET", "/frontend/injections"),
+
   // 鉴权
   login: (username: string, password: string) =>
     request<AuthResult>("POST", "/auth/login", { username, password }),
@@ -156,5 +186,32 @@ export const api = {
     updateComment: (id: number, status: CommentStatus) =>
       request<CommentAdmin>("PUT", `/admin/comments/${id}`, { status }),
     deleteComment: (id: number) => request<void>("DELETE", `/admin/comments/${id}`),
+
+    // 插件管理（multipart 上传 zip，字段名 file）
+    plugins: () => request<Items<PluginInfo>>("GET", "/admin/plugins"),
+    plugin: (slug: string) => request<PluginInfo>("GET", `/admin/plugins/${encodeURIComponent(slug)}`),
+    uploadPlugin: (file: File) => {
+      const form = new FormData()
+      form.append("file", file)
+      return requestForm<PluginInfo>("POST", "/admin/plugins", form)
+    },
+    enablePlugin: (slug: string) =>
+      request<PluginInfo>("POST", `/admin/plugins/${encodeURIComponent(slug)}/enable`),
+    disablePlugin: (slug: string) =>
+      request<PluginInfo>("POST", `/admin/plugins/${encodeURIComponent(slug)}/disable`),
+    deletePlugin: (slug: string) =>
+      request<void>("DELETE", `/admin/plugins/${encodeURIComponent(slug)}`),
+
+    // 主题管理
+    themes: () => request<Items<ThemeInfo>>("GET", "/admin/themes"),
+    uploadTheme: (file: File) => {
+      const form = new FormData()
+      form.append("file", file)
+      return requestForm<ThemeInfo>("POST", "/admin/themes", form)
+    },
+    activateTheme: (slug: string) =>
+      request<ThemeInfo>("POST", `/admin/themes/${encodeURIComponent(slug)}/activate`),
+    deleteTheme: (slug: string) =>
+      request<void>("DELETE", `/admin/themes/${encodeURIComponent(slug)}`),
   },
 }

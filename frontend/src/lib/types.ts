@@ -121,3 +121,64 @@ export interface PostSaveBody {
   tag_ids?: number[]
   status: PostStatus
 }
+
+// —— 扩展系统（插件/主题）—— 对应 docs/extensibility-contract.md
+
+/** 插件/主题数量少不分页，但保留 items/total 形状 */
+export interface Items<T> {
+  items: T[]
+  total: number
+}
+
+export interface PluginInfo {
+  slug: string
+  name: string
+  version: string
+  description?: string | null
+  author?: string | null
+  enabled: boolean
+  hooks?: string[]
+  inject?: string[]
+  min_app_version?: string | null
+  last_error?: string | null
+  installed_at: string
+  updated_at: string
+}
+
+export interface ThemeInfo {
+  slug: string
+  name: string
+  version: string
+  description?: string | null
+  author?: string | null
+  active: boolean
+  builtin: boolean
+  has_css: boolean
+  preview_url?: string | null
+  installed_at: string
+  updated_at: string
+}
+
+/** 设计令牌：key 为 CSS 变量名去 -- 前缀的下划线形式；值为 HSL 分量（radius 带单位） */
+export type ThemeTokens = Record<string, string>
+
+/** GET /api/themes/active 响应（未安装时也返回 default，保证安装页有样式） */
+export interface ActiveTheme {
+  slug: string
+  name: string
+  tokens: ThemeTokens
+  tokens_dark?: ThemeTokens | null
+  css_url: string | null
+  preview_url?: string | null
+}
+
+export interface InjectionFragment {
+  plugin: string
+  html: string
+}
+
+/** GET /api/frontend/injections 响应：启用且声明了 inject 的插件片段 */
+export interface FrontendInjections {
+  head: InjectionFragment[]
+  body_end: InjectionFragment[]
+}

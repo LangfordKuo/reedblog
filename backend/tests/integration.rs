@@ -5,8 +5,23 @@ use reedblog_backend::state::AppState;
 use serde_json::{json, Value};
 use std::path::Path;
 
-/// 在 127.0.0.1 随机端口起一个真实服务，返回 base URL
+/// 在 127.0.0.1 随机端口起一个真实服务，返回 base URL。
+/// 配置文件不存在时预写 [plugins]/[themes] dir 指向同目录（测试隔离，
+/// 避免安装时把内置 default 主题生成到仓库工作目录）；安装流程会保留这两段。
 async fn spawn_server(config_path: &str) -> String {
+    if !Path::new(config_path).exists() {
+        let dir = Path::new(config_path).parent().unwrap();
+        let toml_path = |p: std::path::PathBuf| p.to_str().unwrap().replace('\\', "/");
+        std::fs::write(
+            config_path,
+            format!(
+                "[plugins]\ndir = \"{}\"\n\n[themes]\ndir = \"{}\"\n",
+                toml_path(dir.join("plugins")),
+                toml_path(dir.join("themes")),
+            ),
+        )
+        .unwrap();
+    }
     let state = AppState::new(config_path);
     let app = reedblog_backend::build_router(state, vec!["http://localhost:5173".to_string()]);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

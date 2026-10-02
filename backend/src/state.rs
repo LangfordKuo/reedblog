@@ -4,11 +4,14 @@
 use chrono::Utc;
 use sqlx::any::{install_default_drivers, AnyConnectOptions, AnyPoolOptions};
 use sqlx::{AnyConnection, AnyPool, Connection};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
+use crate::config::{default_plugins_dir, default_themes_dir, Config};
 use crate::error::ApiResult;
+use crate::plugins::PluginHost;
 
 /// 运行期状态（进程内可变）
 #[derive(Debug, Clone)]
@@ -37,6 +40,10 @@ impl Default for Runtime {
 struct Inner {
     config_path: String,
     runtime: RwLock<Runtime>,
+    /// 插件宿主（内存注册表 + 插件目录），Clone 共享
+    plugins: PluginHost,
+    /// 主题存储根目录（active 的权威来源是 config.toml，目录本身启动时解析一次）
+    themes_dir: PathBuf,
 }
 
 #[derive(Clone)]
@@ -48,16 +55,46 @@ impl AppState {
     pub fn new(config_path: impl Into<String>) -> Self {
         // sqlx 0.8 的 Any 驱动要求显式注册底层驱动（幂等，可重复调用）
         install_default_drivers();
+        let config_path = config_path.into();
+        // 插件/主题目录来自 config.toml（[plugins] dir / [themes] dir，缺省 plugins、themes）
+        let cfg = Config::load(Path::new(&config_path));
+        let plugins_dir = PathBuf::from(
+            cfg.as_ref()
+                .map(|c| c.plugins.dir.clone())
+                .unwrap_or_else(default_plugins_dir),
+        );
+        let themes_dir = PathBuf::from(
+            cfg.as_ref()
+                .map(|c| c.themes.dir.clone())
+                .unwrap_or_else(default_themes_dir),
+        );
         Self {
             inner: Arc::new(Inner {
-                config_path: config_path.into(),
+                config_path,
                 runtime: RwLock::new(Runtime::default()),
+                plugins: PluginHost::new(plugins_dir),
+                themes_dir,
             }),
         }
     }
 
     pub fn config_path(&self) -> &str {
         &self.inner.config_path
+    }
+
+    pub fn plugins(&self) -> &PluginHost {
+        &self.inner.plugins
+    }
+
+    pub fn themes_dir(&self) -> &Path {
+        &self.inner.themes_dir
+    }
+
+    /// config.toml 中当前激活主题 slug（读不到配置时回退 default）
+    pub fn active_theme_slug(&self) -> String {
+        Config::load(Path::new(&self.inner.config_path))
+            .map(|c| c.themes.active)
+            .unwrap_or_else(crate::config::default_active_theme)
     }
 
     pub async fn is_installed(&self) -> bool {

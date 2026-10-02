@@ -368,6 +368,19 @@ pub fn is_unique_violation(e: &sqlx::Error) -> bool {
     }
 }
 
+/// Markdown → HTML（文章渲染管线：before_render 改写 content_md 后由此渲染，
+/// after_render 再改写结果 HTML；扩展契约「后端钩子」）
+pub fn render_markdown(md: &str) -> String {
+    use pulldown_cmark::{html, Options, Parser};
+    let mut opts = Options::ENABLE_TABLES;
+    opts.insert(Options::ENABLE_STRIKETHROUGH);
+    opts.insert(Options::ENABLE_TASKLISTS);
+    let parser = Parser::new_ext(md, opts);
+    let mut out = String::new();
+    html::push_html(&mut out, parser);
+    out
+}
+
 /// 校验 category_id 存在（不存在 → 422 validation_error）
 pub async fn ensure_category_exists(pool: &AnyPool, category_id: i64) -> ApiResult<()> {
     let n: i64 = sqlx::query("SELECT COUNT(*) FROM categories WHERE id = ?")

@@ -8,11 +8,23 @@ use axum::response::Response;
 use crate::error::ApiError;
 use crate::state::AppState;
 
-/// 免安装白名单（精确路径匹配；/api/install 仅在 POST 时放行）
+/// 免安装白名单（精确路径匹配；/api/install 仅在 POST 时放行）。
+/// 扩展契约第三部分新增（仅 GET）：themes/active、themes/:slug/theme.css、
+/// themes/:slug/assets/*、frontend/injections —— 未安装时前端也有样式与（空）注入。
 fn is_exempt(path: &str, method: &axum::http::Method) -> bool {
-    path == "/api/health"
+    if path == "/api/health"
         || path == "/api/install/status"
         || (path == "/api/install" && method == axum::http::Method::POST)
+    {
+        return true;
+    }
+    if method != axum::http::Method::GET {
+        return false;
+    }
+    path == "/api/themes/active"
+        || path == "/api/frontend/injections"
+        || (path.starts_with("/api/themes/")
+            && (path.ends_with("/theme.css") || path.contains("/assets/")))
 }
 
 pub async fn not_installed_gate(

@@ -14,7 +14,8 @@ use crate::models::{
 };
 use crate::state::{now_rfc3339, require_pool, AppState};
 
-use super::helpers::{derive_excerpt, fetch_post_tags, last_insert_id_on};
+use super::helpers::{derive_excerpt, fetch_post_tags, last_insert_id_on, render_markdown};
+use crate::plugins::CommentDecision;
 
 /// 把文章行（列表/详情共用列集）转成 PostPublic
 async fn row_to_post_public(pool: &AnyPool, r: &AnyRow) -> ApiResult<PostPublic> {
@@ -131,6 +132,10 @@ pub async fn list_posts(
 }
 
 /// GET /api/posts/:slug → PostDetail；不存在/未发布 → 404 not_found
+///
+/// 渲染管线（扩展契约「后端钩子」）：
+/// post.before_render 链改写 content_md → Markdown 渲染 → post.after_render 链改写 content_html。
+/// 插件运行时错误自动跳过，不阻断响应。
 pub async fn get_post(
     State(state): State<AppState>,
     Path(slug): Path<String>,
@@ -145,7 +150,22 @@ pub async fn get_post(
     let row = row.ok_or_else(ApiError::not_found)?;
     let content_md = row.get::<String, _>("content_md");
     let post = row_to_post_public(&pool, &row).await?;
-    Ok(Json(PostDetail { post, content_md }))
+
+    let (render_title, render_md) = state
+        .plugins()
+        .run_post_before_render(&post.title, &content_md, &post.slug)
+        .await;
+    let raw_html = render_markdown(&render_md);
+    let content_html = state
+        .plugins()
+        .run_post_after_render(&render_title, &raw_html, &post.slug)
+        .await;
+
+    Ok(Json(PostDetail {
+        post,
+        content_md: render_md,
+        content_html,
+    }))
 }
 
 /// 找已发布文章的 id（评论接口共用）；不存在/未发布 → 404
@@ -185,6 +205,9 @@ pub async fn list_comments(
 }
 
 /// POST /api/posts/:slug/comments → 201 CommentPub（先发后审：创建即 approved）
+///
+/// comment.before_create 钩子链（扩展契约）：任一插件返回 block 立即短路 → 403 comment_blocked
+/// （reason 进 message）；allow 可携带修改后的字段。插件运行时错误跳过、不阻断。
 pub async fn create_comment(
     State(state): State<AppState>,
     Path(slug): Path<String>,
@@ -207,6 +230,37 @@ pub async fn create_comment(
         .map(|e| e.trim().to_string())
         .filter(|e| !e.is_empty());
 
+    let (author_name, email, content) = match state
+        .plugins()
+        .run_comment_before_create(&slug, author_name, email.as_deref(), content)
+        .await
+    {
+        CommentDecision::Block { reason } => {
+            let message = if reason.trim().is_empty() {
+                "评论被插件拦截".to_string()
+            } else {
+                reason
+            };
+            return Err(ApiError::new(
+                StatusCode::FORBIDDEN,
+                "comment_blocked",
+                message,
+            ));
+        }
+        CommentDecision::Allow {
+            author_name,
+            email,
+            content,
+        } => (author_name, email, content),
+    };
+    // 插件改写后的字段仍需满足基本约束
+    if author_name.trim().is_empty() {
+        return Err(ApiError::validation("author_name 不能为空"));
+    }
+    if content.trim().is_empty() {
+        return Err(ApiError::validation("content 不能为空"));
+    }
+
     let created_at = now_rfc3339();
     let mut conn = pool.acquire().await?;
     sqlx::query(
@@ -214,9 +268,9 @@ pub async fn create_comment(
          VALUES (?, ?, ?, ?, 'approved', ?)",
     )
     .bind(post_id)
-    .bind(author_name)
-    .bind(email.as_deref())
-    .bind(content)
+    .bind(author_name.trim())
+    .bind(email.as_deref().map(str::trim).filter(|e| !e.is_empty()))
+    .bind(content.trim())
     .bind(&created_at)
     .execute(&mut *conn)
     .await?;
@@ -226,8 +280,8 @@ pub async fn create_comment(
         StatusCode::CREATED,
         Json(CommentPub {
             id,
-            author_name: author_name.to_string(),
-            content: content.to_string(),
+            author_name: author_name.trim().to_string(),
+            content: content.trim().to_string(),
             created_at,
         }),
     ))

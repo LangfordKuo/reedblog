@@ -6,9 +6,12 @@ pub mod error;
 pub mod handlers;
 pub mod middleware;
 pub mod models;
+pub mod packages;
+pub mod plugins;
 pub mod state;
+pub mod themes;
 
-use axum::extract::{Request, State};
+use axum::extract::{DefaultBodyLimit, Request, State};
 use axum::http::{header, HeaderValue, Method};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -18,8 +21,14 @@ use tower_http::cors::CorsLayer;
 
 use config::Config;
 use error::ApiError;
-use handlers::{admin_comments, admin_posts, admin_terms, install, public, site_auth};
+use handlers::{
+    admin_comments, admin_plugins, admin_posts, admin_terms, admin_themes, frontend, install,
+    public, site_auth,
+};
 use state::{connect_pool, AppState};
+
+/// 插件/主题 zip 上传的请求体上限
+const UPLOAD_LIMIT: usize = 32 * 1024 * 1024;
 
 /// /api/* 未匹配路径的兜底：未安装 → 503 not_installed；已安装 → 404 JSON
 async fn api_fallback(State(state): State<AppState>, _req: Request) -> Response {
@@ -103,6 +112,49 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
             axum::routing::put(admin_comments::admin_update_comment)
                 .delete(admin_comments::admin_delete_comment),
         )
+        // 前端注入与主题（公开，未安装门禁白名单）
+        .route("/frontend/injections", get(frontend::frontend_injections))
+        .route("/themes/active", get(frontend::themes_active))
+        .route("/themes/{slug}/theme.css", get(frontend::theme_css))
+        .route("/themes/{slug}/preview.png", get(frontend::theme_preview))
+        .route(
+            "/themes/{slug}/assets/{*path}",
+            get(frontend::theme_asset),
+        )
+        // 管理：插件
+        .route(
+            "/admin/plugins",
+            get(admin_plugins::admin_list_plugins)
+                .post(admin_plugins::admin_install_plugin)
+                .layer(DefaultBodyLimit::max(UPLOAD_LIMIT)),
+        )
+        .route(
+            "/admin/plugins/{slug}",
+            get(admin_plugins::admin_get_plugin).delete(admin_plugins::admin_delete_plugin),
+        )
+        .route(
+            "/admin/plugins/{slug}/enable",
+            post(admin_plugins::admin_enable_plugin),
+        )
+        .route(
+            "/admin/plugins/{slug}/disable",
+            post(admin_plugins::admin_disable_plugin),
+        )
+        // 管理：主题
+        .route(
+            "/admin/themes",
+            get(admin_themes::admin_list_themes)
+                .post(admin_themes::admin_install_theme)
+                .layer(DefaultBodyLimit::max(UPLOAD_LIMIT)),
+        )
+        .route(
+            "/admin/themes/{slug}",
+            axum::routing::delete(admin_themes::admin_delete_theme),
+        )
+        .route(
+            "/admin/themes/{slug}/activate",
+            post(admin_themes::admin_activate_theme),
+        )
         // 未匹配路径兜底（layer 不覆盖默认 fallback，需显式声明）
         .fallback(api_fallback)
         // 未安装门禁：除白名单外一律 503 not_installed
@@ -115,9 +167,12 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
     Router::new().nest("/api", api).layer(cors)
 }
 
-/// 启动时恢复状态：config.toml 可完整加载（含非空 jwt_secret）且数据库可连 → 已安装
+/// 启动时恢复状态：config.toml 可完整加载（含非空 jwt_secret）且数据库可连 → 已安装。
+/// 无论是否已安装都补建内置 default 主题（幂等）；已安装则按 DB 恢复插件 enabled 状态。
 pub async fn startup_state(config_path: &str) -> AppState {
     let state = AppState::new(config_path);
+    // 首次运行/升级启动：themes/default 不存在时自动生成内置主题
+    themes::ensure_default_theme(state.themes_dir());
     if let Some(cfg) = Config::load(Path::new(config_path)) {
         if cfg.auth.jwt_secret.is_empty() {
             return state;
@@ -125,6 +180,8 @@ pub async fn startup_state(config_path: &str) -> AppState {
         match cfg.db_url() {
             Some(url) => match connect_pool(&cfg.database.db_type, &url).await {
                 Ok(pool) => {
+                    // 插件启用状态恢复（DB 无记录的磁盘插件视为未启用）
+                    state.plugins().restore_from_db(&pool).await;
                     state
                         .activate(
                             cfg.database.db_type.clone(),

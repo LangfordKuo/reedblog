@@ -227,6 +227,17 @@ pub async fn admin_create_post(
     let post = load_post_admin(&pool, id)
         .await?
         .ok_or_else(|| ApiError::internal("创建后读取文章失败"))?;
+
+    // post.after_publish 通知钩子（扩展契约）：创建即发布时触发；返回值忽略、错误不阻断
+    if status == "published" {
+        if let Some(pa) = post.published_at.as_deref() {
+            state
+                .plugins()
+                .run_post_after_publish(&post.title, &post.slug, pa)
+                .await;
+        }
+    }
+
     Ok((StatusCode::CREATED, Json(post)))
 }
 
@@ -302,7 +313,8 @@ pub async fn admin_update_post(
 
     let now = now_rfc3339();
     // draft→published 时若 published_at 为空则写入；其余保持原值
-    let published_at = if status == "published" && existing.published_at.is_none() {
+    let newly_published = status == "published" && existing.published_at.is_none();
+    let published_at = if newly_published {
         Some(now.clone())
     } else {
         existing.published_at.clone()
@@ -335,6 +347,17 @@ pub async fn admin_update_post(
     let post = load_post_admin(&pool, id)
         .await?
         .ok_or_else(|| ApiError::internal("更新后读取文章失败"))?;
+
+    // post.after_publish 通知钩子（扩展契约）：draft→published 首次发布时触发
+    if newly_published {
+        if let Some(pa) = post.published_at.as_deref() {
+            state
+                .plugins()
+                .run_post_after_publish(&post.title, &post.slug, pa)
+                .await;
+        }
+    }
+
     Ok(Json(post))
 }
 

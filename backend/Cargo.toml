@@ -12,7 +12,7 @@ name = "reedblog-backend"
 path = "src/main.rs"
 
 [dependencies]
-axum = "0.8"
+axum = { version = "0.8", features = ["multipart"] }
 tokio = { version = "1", features = ["full"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "any", "sqlite", "mysql"] }
 serde = { version = "1", features = ["derive"] }
@@ -24,7 +24,10 @@ jsonwebtoken = "9"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 rand = "0.8"
 urlencoding = "2"
+rhai = { version = "1", features = ["sync"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 
 [dev-dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart"] }
 tempfile = "3"

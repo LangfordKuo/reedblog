@@ -17,7 +17,8 @@ use std::time::Duration;
 
 use crate::auth::{generate_jwt_secret, hash_password};
 use crate::config::{
-    AuthConfig, Config, CorsConfig, DatabaseConfig, MysqlConfig, ServerConfig, SiteConfig,
+    AuthConfig, Config, CorsConfig, DatabaseConfig, MysqlConfig, PluginsConfig, ServerConfig,
+    SiteConfig, ThemesConfig,
 };
 use crate::error::{ApiError, ApiResult, ValidJson};
 use crate::models::InstallRequest;
@@ -90,6 +91,8 @@ pub async fn install(
             jwt_secret: String::new(),
         },
         cors: CorsConfig::default(),
+        plugins: PluginsConfig::default(),
+        themes: ThemesConfig::default(),
     });
     cfg.database.db_type = req.db_type.clone();
     if req.db_type == "sqlite" {
@@ -160,6 +163,10 @@ pub async fn install(
         .connect_with(opts)
         .await
         .map_err(|e| ApiError::internal(format!("建立连接池失败: {e}")))?;
+
+    // 安装即「首次运行」：补建内置 default 主题 + 按 DB 恢复插件启用状态
+    crate::themes::ensure_default_theme(state.themes_dir());
+    state.plugins().restore_from_db(&pool).await;
 
     state
         .activate(

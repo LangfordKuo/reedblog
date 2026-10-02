@@ -1,6 +1,9 @@
 pub mod admin_comments;
+pub mod admin_plugins;
 pub mod admin_posts;
 pub mod admin_terms;
+pub mod admin_themes;
+pub mod frontend;
 pub mod helpers;
 pub mod install;
 pub mod public;

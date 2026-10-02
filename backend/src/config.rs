@@ -6,11 +6,65 @@ use std::path::Path;
 pub struct Config {
     #[serde(default)]
     pub server: ServerConfig,
+    // database/site/auth 允许缺省：安装前可只写 [plugins]/[themes] 等段预配置目录；
+    // 「已安装」仍由非空 jwt_secret + 可连数据库判定，缺省段落不影响该判定
+    #[serde(default)]
     pub database: DatabaseConfig,
+    #[serde(default)]
     pub site: SiteConfig,
+    #[serde(default)]
     pub auth: AuthConfig,
     #[serde(default)]
     pub cors: CorsConfig,
+    #[serde(default)]
+    pub plugins: PluginsConfig,
+    #[serde(default)]
+    pub themes: ThemesConfig,
+}
+
+/// [plugins]：插件存储根目录（相对后端运行目录或绝对路径）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginsConfig {
+    #[serde(default = "default_plugins_dir")]
+    pub dir: String,
+}
+
+impl Default for PluginsConfig {
+    fn default() -> Self {
+        Self {
+            dir: default_plugins_dir(),
+        }
+    }
+}
+
+pub fn default_plugins_dir() -> String {
+    "plugins".to_string()
+}
+
+/// [themes]：主题存储根目录 + 当前激活主题 slug（active 权威来源）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThemesConfig {
+    #[serde(default = "default_themes_dir")]
+    pub dir: String,
+    #[serde(default = "default_active_theme")]
+    pub active: String,
+}
+
+impl Default for ThemesConfig {
+    fn default() -> Self {
+        Self {
+            dir: default_themes_dir(),
+            active: default_active_theme(),
+        }
+    }
+}
+
+pub fn default_themes_dir() -> String {
+    "themes".to_string()
+}
+
+pub fn default_active_theme() -> String {
+    "default".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,11 +95,22 @@ fn default_port() -> u16 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseConfig {
     /// "sqlite" | "mysql"
+    #[serde(default)]
     pub db_type: String,
     #[serde(default = "default_sqlite_path")]
     pub sqlite_path: String,
     #[serde(default)]
     pub mysql: Option<MysqlConfig>,
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self {
+            db_type: String::new(),
+            sqlite_path: default_sqlite_path(),
+            mysql: None,
+        }
+    }
 }
 
 fn default_sqlite_path() -> String {
@@ -67,15 +132,17 @@ fn default_mysql_port() -> u16 {
     3306
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SiteConfig {
+    #[serde(default)]
     pub title: String,
     #[serde(default)]
     pub subtitle: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AuthConfig {
+    #[serde(default)]
     pub jwt_secret: String,
 }
 
@@ -188,6 +255,8 @@ mod tests {
                 jwt_secret: String::new(),
             },
             cors: CorsConfig::default(),
+            plugins: PluginsConfig::default(),
+            themes: ThemesConfig::default(),
         }
     }
 

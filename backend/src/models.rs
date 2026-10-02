@@ -33,7 +33,11 @@ pub struct PostPublic {
 pub struct PostDetail {
     #[serde(flatten)]
     pub post: PostPublic,
+    /// 经 post.before_render 钩子链改写后的 Markdown（未启用插件时即库中原文）
     pub content_md: String,
+    /// 渲染管线产物：before_render 改写 content_md → Markdown 渲染 → after_render 改写。
+    /// 扩展契约新增字段（核心契约 PostDetail 的超集，前端可继续只用 content_md）
+    pub content_html: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

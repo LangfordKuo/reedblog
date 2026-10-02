@@ -8,6 +8,8 @@ import {
   LogOutIcon,
   MenuIcon,
   MessageSquareIcon,
+  PaletteIcon,
+  PuzzleIcon,
   TagsIcon,
   XIcon,
 } from "lucide-react"
@@ -24,6 +26,8 @@ const navItems = [
   { to: "/admin/categories", label: "分类管理", icon: FolderIcon, end: false },
   { to: "/admin/tags", label: "标签管理", icon: TagsIcon, end: false },
   { to: "/admin/comments", label: "评论管理", icon: MessageSquareIcon, end: false },
+  { to: "/admin/plugins", label: "插件", icon: PuzzleIcon, end: false },
+  { to: "/admin/themes", label: "主题", icon: PaletteIcon, end: false },
 ]
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
