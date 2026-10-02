@@ -1,0 +1,30 @@
+[package]
+name = "reedblog-backend"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "reedblog_backend"
+path = "src/lib.rs"
+
+[[bin]]
+name = "reedblog-backend"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "any", "sqlite", "mysql"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+tower-http = { version = "0.6", features = ["cors"] }
+argon2 = "0.5"
+jsonwebtoken = "9"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+rand = "0.8"
+urlencoding = "2"
+
+[dev-dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+tempfile = "3"

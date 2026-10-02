@@ -1,0 +1,232 @@
+import { useCallback, useEffect, useState } from "react"
+import { Link, useSearchParams } from "react-router-dom"
+import { EyeIcon, EyeOffIcon, Loader2Icon, Trash2Icon } from "lucide-react"
+import { toast } from "sonner"
+
+import { ConfirmDialog } from "@/components/confirm-dialog"
+import { Pagination } from "@/components/pagination"
+import { BlockSpinner } from "@/components/spinner"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent } from "@/components/ui/card"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { api, errorMessage } from "@/lib/api"
+import { formatDateTime } from "@/lib/utils"
+import type { CommentAdmin, CommentStatus, Page } from "@/lib/types"
+
+type StatusFilter = CommentStatus | "all"
+
+const PER_PAGE = 10
+
+export default function AdminCommentsPage() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const status = (searchParams.get("status") ?? "all") as StatusFilter
+  const page = Math.max(1, Number(searchParams.get("page")) || 1)
+
+  const [data, setData] = useState<Page<CommentAdmin> | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [togglingId, setTogglingId] = useState<number | null>(null)
+  const [deleting, setDeleting] = useState<CommentAdmin | null>(null)
+  const [deleteLoading, setDeleteLoading] = useState(false)
+
+  const load = useCallback(() => {
+    setLoading(true)
+    api.admin
+      .comments({ status, page, per_page: PER_PAGE })
+      .then((d) => {
+        setData(d)
+        setError(null)
+      })
+      .catch((e) => setError(errorMessage(e)))
+      .finally(() => setLoading(false))
+  }, [status, page])
+
+  useEffect(load, [load])
+
+  const updateParams = (patch: Record<string, string | null>) => {
+    const next = new URLSearchParams(searchParams)
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === null) next.delete(k)
+      else next.set(k, v)
+    }
+    setSearchParams(next, { replace: true })
+  }
+
+  const toggleStatus = async (c: CommentAdmin) => {
+    const next: CommentStatus = c.status === "approved" ? "hidden" : "approved"
+    setTogglingId(c.id)
+    try {
+      const updated = await api.admin.updateComment(c.id, next)
+      setData((prev) =>
+        prev ? { ...prev, items: prev.items.map((it) => (it.id === updated.id ? updated : it)) } : prev,
+      )
+      toast.success(next === "hidden" ? "评论已隐藏" : "评论已恢复")
+    } catch (err) {
+      toast.error(errorMessage(err))
+    } finally {
+      setTogglingId(null)
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!deleting) return
+    setDeleteLoading(true)
+    try {
+      await api.admin.deleteComment(deleting.id)
+      toast.success("评论已删除")
+      setDeleting(null)
+      load()
+    } catch (err) {
+      toast.error(errorMessage(err))
+      setDeleting(null)
+    } finally {
+      setDeleteLoading(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-6">
+      <div>
+        <h1 className="text-xl font-bold">评论管理</h1>
+        <p className="text-sm text-muted-foreground">共 {data?.total ?? 0} 条评论</p>
+      </div>
+
+      <Tabs
+        value={status}
+        onValueChange={(v) => updateParams({ status: v === "all" ? null : v, page: null })}
+      >
+        <TabsList>
+          <TabsTrigger value="all">全部</TabsTrigger>
+          <TabsTrigger value="approved">已展示</TabsTrigger>
+          <TabsTrigger value="hidden">已隐藏</TabsTrigger>
+        </TabsList>
+      </Tabs>
+
+      {loading ? (
+        <BlockSpinner />
+      ) : error ? (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-6 text-sm text-destructive">
+          {error}
+        </div>
+      ) : data && data.items.length === 0 ? (
+        <Card>
+          <CardContent className="py-12 text-center text-sm text-muted-foreground">
+            没有符合条件的评论
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>文章</TableHead>
+                  <TableHead>作者</TableHead>
+                  <TableHead>内容</TableHead>
+                  <TableHead>时间</TableHead>
+                  <TableHead>状态</TableHead>
+                  <TableHead className="text-right">操作</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data?.items.map((c) => (
+                  <TableRow key={c.id}>
+                    <TableCell className="max-w-40">
+                      <Link
+                        to={`/admin/posts/${c.post_id}/edit`}
+                        className="block truncate underline-offset-4 hover:underline"
+                      >
+                        {c.post_title}
+                      </Link>
+                    </TableCell>
+                    <TableCell>
+                      <div className="font-medium">{c.author_name}</div>
+                      {c.email && (
+                        <div className="max-w-40 truncate text-xs text-muted-foreground">
+                          {c.email}
+                        </div>
+                      )}
+                    </TableCell>
+                    <TableCell className="max-w-64 whitespace-normal">
+                      <p className="line-clamp-2 text-muted-foreground">{c.content}</p>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {formatDateTime(c.created_at)}
+                    </TableCell>
+                    <TableCell>
+                      {c.status === "approved" ? (
+                        <Badge className="border-emerald-200 bg-emerald-50 text-emerald-700">
+                          已展示
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-muted-foreground">
+                          已隐藏
+                        </Badge>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          disabled={togglingId === c.id}
+                          aria-label={c.status === "approved" ? "隐藏" : "恢复"}
+                          title={c.status === "approved" ? "隐藏" : "恢复展示"}
+                          onClick={() => void toggleStatus(c)}
+                        >
+                          {togglingId === c.id ? (
+                            <Loader2Icon className="animate-spin" />
+                          ) : c.status === "approved" ? (
+                            <EyeOffIcon />
+                          ) : (
+                            <EyeIcon />
+                          )}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label="删除"
+                          className="text-destructive hover:text-destructive"
+                          onClick={() => setDeleting(c)}
+                        >
+                          <Trash2Icon />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+
+      {data && (
+        <Pagination
+          page={data.page}
+          perPage={data.per_page}
+          total={data.total}
+          onChange={(p) => updateParams({ page: p <= 1 ? null : String(p) })}
+        />
+      )}
+
+      <ConfirmDialog
+        open={deleting !== null}
+        onOpenChange={(o) => !o && setDeleting(null)}
+        title="删除评论"
+        description={`确定删除 ${deleting?.author_name ?? ""} 的这条评论吗？此操作不可撤销。`}
+        loading={deleteLoading}
+        onConfirm={handleDelete}
+      />
+    </div>
+  )
+}

@@ -1,0 +1,14 @@
+# Claude Code 输出
+.cc-*.json
+.cc-*.err
+
+# 运行时数据
+backend/config.toml
+backend/*.db
+backend/*.db-shm
+backend/*.db-wal
+backend/target/
+
+# 前端
+frontend/node_modules/
+frontend/dist/
