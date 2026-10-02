@@ -1,0 +1,84 @@
+# reedblog 主题元数据 + 设计令牌（上传时后端校验元数据；令牌原样下发，前端映射 CSS 变量）
+# 字段与令牌完整说明见 docs/theme-development.md
+
+name = "午夜暗色"
+slug = "midnight"                 # 唯一标识：^[a-z0-9-]+$，且必须与目录名一致；不可用 "default"（内置保护）
+version = "1.0.0"                 # semver
+description = "reedblog 官方示例主题：深蓝色暗色调，覆盖全部设计令牌，附自定义 CSS 与静态资源示例"
+author = "reedblog"
+
+# [tokens] 会被前端写入 :root 的 CSS 变量（key 中 _ 换成 -，如 primary_foreground → --primary-foreground）。
+# 值为 HSL 分量串（不带 hsl() 包裹，前端自动补全）；radius 例外，原样写入、须带单位。
+#
+# 注意：这里覆盖了前端认识的全部 32 个令牌 key。暗色主题务必像这样给全套令牌——
+# 只给部分 key 时，缺失的 key 会回落到内置浅色默认值，出现「页面是深色、卡片还是白色」的混搭。
+[tokens]
+radius = "0.5rem"
+background = "222 47% 7%"
+foreground = "210 40% 92%"
+card = "222 44% 10%"
+card_foreground = "210 40% 92%"
+popover = "222 44% 10%"
+popover_foreground = "210 40% 92%"
+primary = "199 89% 55%"
+primary_foreground = "222 47% 7%"
+secondary = "217 33% 17%"
+secondary_foreground = "210 40% 92%"
+muted = "217 33% 15%"
+muted_foreground = "215 20% 62%"
+accent = "217 33% 19%"
+accent_foreground = "199 89% 70%"
+destructive = "0 72% 51%"
+border = "217 33% 20%"
+input = "217 33% 22%"
+ring = "199 89% 48%"
+chart_1 = "199 89% 55%"
+chart_2 = "160 84% 44%"
+chart_3 = "262 83% 66%"
+chart_4 = "38 92% 60%"
+chart_5 = "330 81% 60%"
+sidebar = "222 47% 6%"
+sidebar_foreground = "210 40% 92%"
+sidebar_primary = "199 89% 55%"
+sidebar_primary_foreground = "222 47% 7%"
+sidebar_accent = "217 33% 17%"
+sidebar_accent_foreground = "210 40% 92%"
+sidebar_border = "217 33% 20%"
+sidebar_ring = "199 89% 48%"
+
+# [tokens_dark] 可选：前端会注入为 `.dark { ... !important }` 样式，
+# 仅当 <html> 带 .dark 类时生效（当前版本没有内置亮/暗切换开关）。
+# 本主题本身就是暗色，[tokens_dark] 给同一套色板，保证任何情况下观感一致。
+[tokens_dark]
+radius = "0.5rem"
+background = "222 47% 7%"
+foreground = "210 40% 92%"
+card = "222 44% 10%"
+card_foreground = "210 40% 92%"
+popover = "222 44% 10%"
+popover_foreground = "210 40% 92%"
+primary = "199 89% 55%"
+primary_foreground = "222 47% 7%"
+secondary = "217 33% 17%"
+secondary_foreground = "210 40% 92%"
+muted = "217 33% 15%"
+muted_foreground = "215 20% 62%"
+accent = "217 33% 19%"
+accent_foreground = "199 89% 70%"
+destructive = "0 72% 51%"
+border = "217 33% 20%"
+input = "217 33% 22%"
+ring = "199 89% 48%"
+chart_1 = "199 89% 55%"
+chart_2 = "160 84% 44%"
+chart_3 = "262 83% 66%"
+chart_4 = "38 92% 60%"
+chart_5 = "330 81% 60%"
+sidebar = "222 47% 6%"
+sidebar_foreground = "210 40% 92%"
+sidebar_primary = "199 89% 55%"
+sidebar_primary_foreground = "222 47% 7%"
+sidebar_accent = "217 33% 17%"
+sidebar_accent_foreground = "210 40% 92%"
+sidebar_border = "217 33% 20%"
+sidebar_ring = "199 89% 48%"

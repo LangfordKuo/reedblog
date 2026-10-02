@@ -1,0 +1,49 @@
+/*
+ * midnight 主题自定义 CSS（可选文件；存在时后端通过
+ * GET /api/themes/midnight/theme.css 托管，前端以 <link rel="stylesheet"> 注入）。
+ *
+ * 加载顺序：该文件在内置样式之后注入 <head>，同优先级规则天然覆盖内置样式；
+ * 需要压过更高优先级规则（或内置样式里写死的颜色）时使用 !important。
+ */
+
+/*
+ * 自定义字体示例：把字体文件放进主题目录的 assets/，
+ * 用绝对路径 /api/themes/<slug>/assets/<相对路径> 引用（后端静态托管，防目录穿越）。
+ * 放入 assets/inter-var.woff2 后取消下面的注释即可生效。
+ *
+@font-face {
+  font-family: "Midnight Sans";
+  src: url("/api/themes/midnight/assets/inter-var.woff2") format("woff2");
+  font-display: swap;
+}
+body {
+  font-family: "Midnight Sans", ui-sans-serif, system-ui, sans-serif;
+}
+ */
+
+/* 内置 index.css 给文章代码块写死了浅色背景（.prose :where(pre) 规则），
+   暗色主题必须覆盖，这里用 !important 确保压过 */
+.prose :where(pre):not(:where([class~="not-prose"] *)) {
+  background-color: hsl(222 44% 12%) !important;
+  border-color: hsl(217 33% 20%) !important;
+  color: hsl(210 40% 92%) !important;
+}
+
+/* 选中文本配色 */
+::selection {
+  background: hsl(199 89% 55% / 35%);
+  color: hsl(210 40% 96%);
+}
+
+/* 滚动条美化（WebKit 内核） */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: hsl(217 33% 24%);
+  border-radius: 8px;
+}
+::-webkit-scrollbar-track {
+  background: hsl(222 47% 7%);
+}

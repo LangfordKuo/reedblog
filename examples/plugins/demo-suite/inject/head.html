@@ -1,0 +1,13 @@
+<!--
+  head 注入片段：前端会把它原样（不转义）插入公开页面的 <head>。
+  其中的 <script> 会被重建为可执行脚本；外部脚本（带 src 的 <script>、
+  <link rel="stylesheet"> 等）同样有效。仅公开博客页面注入，/admin 与 /install 不注入。
+
+  实际使用时替换成你自己的统计服务，例如：
+  <script defer data-domain="yourblog.example.com" src="https://plausible.io/js/script.js"></script>
+-->
+<script>
+  window.__demoSuitePV = (window.__demoSuitePV || 0) + 1;
+  console.info("[demo-suite] 页面访问 #" + window.__demoSuitePV, location.pathname);
+</script>
+<meta name="generator" content="reedblog + demo-suite">

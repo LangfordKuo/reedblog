@@ -1,0 +1,18 @@
+# reedblog 插件元数据 + 能力声明（上传时后端逐项校验，字段说明见 docs/plugin-development.md）
+
+name = "博客小套件"                  # 显示名，不能为空
+slug = "demo-suite"                 # 唯一标识：^[a-z0-9-]+$，且必须与目录名一致
+version = "1.0.0"                   # semver（X.Y.Z，允许 -prerelease / +build 后缀）
+description = "reedblog 官方示例插件：评论违禁词过滤 + 文章版权页脚 + 前端注入演示"
+author = "reedblog"
+
+# 可选：要求的最低 reedblog 版本；启用时若高于当前应用版本会被拒绝（422 invalid_manifest）
+min_app_version = "0.1.0"
+
+# 声明实现的后端钩子（只有声明过的钩子会被调用；脚本里多写的钩子函数不会执行）。
+# 合法值仅 4 个：post.before_render / post.after_render / comment.before_create / post.after_publish
+hooks = ["comment.before_create", "post.after_render"]
+
+# 声明前端注入位置（对应 inject/head.html、inject/body_end.html；未声明则不注入）。
+# 合法值仅 2 个：head / body_end
+inject = ["head", "body_end"]
