@@ -88,12 +88,7 @@ fn tiny_png(pad: usize) -> Vec<u8> {
     v
 }
 
-async fn upload_image(
-    c: &reqwest::Client,
-    base: &str,
-    token: &str,
-    data: Vec<u8>,
-) -> Value {
+async fn upload_image(c: &reqwest::Client, base: &str, token: &str, data: Vec<u8>) -> Value {
     let part = reqwest::multipart::Part::bytes(data).file_name("pic.png".to_string());
     let form = reqwest::multipart::Form::new().part("file", part);
     let r = c
@@ -127,7 +122,10 @@ async fn admin_posts(c: &reqwest::Client, base: &str, token: &str) -> Vec<Value>
         .await
         .unwrap();
     assert_eq!(r.status(), 200);
-    r.json::<Value>().await.unwrap()["items"].as_array().unwrap().clone()
+    r.json::<Value>().await.unwrap()["items"]
+        .as_array()
+        .unwrap()
+        .clone()
 }
 
 async fn export(c: &reqwest::Client, base: &str, token: Option<&str>) -> reqwest::Response {
@@ -153,7 +151,9 @@ async fn import(
     if let Some(cf) = confirm {
         form = form.text("confirm", cf.to_string());
     }
-    let mut req = c.post(format!("{base}/api/admin/backup/import")).multipart(form);
+    let mut req = c
+        .post(format!("{base}/api/admin/backup/import"))
+        .multipart(form);
     if let Some(t) = token {
         req = req.bearer_auth(t);
     }
@@ -242,7 +242,10 @@ async fn export_produces_expected_zip() {
         .to_str()
         .unwrap()
         .to_string();
-    assert!(disposition.contains("attachment; filename=\"reedblog-backup-"), "{disposition}");
+    assert!(
+        disposition.contains("attachment; filename=\"reedblog-backup-"),
+        "{disposition}"
+    );
     assert!(disposition.contains(".zip\""), "{disposition}");
     let zip = r.bytes().await.unwrap().to_vec();
 
@@ -259,8 +262,20 @@ async fn export_produces_expected_zip() {
     assert_eq!(manifest["db_type"], "sqlite");
     let tables = manifest["tables"].as_object().unwrap();
     for t in [
-        "users", "categories", "tags", "posts", "post_tags", "comments", "plugins", "settings",
-        "pages", "page_links", "theme_settings", "theme_widgets", "post_likes", "media",
+        "users",
+        "categories",
+        "tags",
+        "posts",
+        "post_tags",
+        "comments",
+        "plugins",
+        "settings",
+        "pages",
+        "page_links",
+        "theme_settings",
+        "theme_widgets",
+        "post_likes",
+        "media",
         "post_revisions",
     ] {
         assert!(tables.contains_key(t), "manifest.tables 缺少 {t}");
@@ -472,7 +487,9 @@ async fn import_restores_data_and_media() {
     let mut file_count = 0usize;
     let mut stack = vec![tmp.path().join("uploads")];
     while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for e in entries.flatten() {
             let ft = e.file_type().unwrap();
             if ft.is_dir() {
@@ -562,7 +579,14 @@ async fn import_rejects_invalid_zips() {
         .unwrap();
 
     // 4.1 非 zip 字节
-    let r = import(&c, &base, Some(&token), b"this is not a zip".to_vec(), Some("REPLACE")).await;
+    let r = import(
+        &c,
+        &base,
+        Some(&token),
+        b"this is not a zip".to_vec(),
+        Some("REPLACE"),
+    )
+    .await;
     assert_eq!(r.status(), 422);
     assert_eq!(err_code(r).await, "invalid_backup");
 
@@ -587,7 +611,12 @@ async fn import_rejects_invalid_zips() {
         !tmp.path().join("evil.txt").exists(),
         "越界路径不得在 uploads 根外产生文件"
     );
-    assert!(!tmp.path().join("uploads").join("..").join("evil.txt").exists());
+    assert!(!tmp
+        .path()
+        .join("uploads")
+        .join("..")
+        .join("evil.txt")
+        .exists());
 
     // 4.4 format_version 不兼容
     let mut bad_manifest = manifest.clone();

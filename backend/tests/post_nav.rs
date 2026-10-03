@@ -241,7 +241,10 @@ async fn drafts_and_scheduled_visibility_in_neighbors() {
         for field in ["prev_post", "next_post"] {
             if let Some((_, s)) = nav_of(&d, field) {
                 assert_ne!(s, "draft-hidden", "草稿不应作相邻项（{slug} 的 {field}）");
-                assert_ne!(s, "sched-future", "未到点 scheduled 不应作相邻项（{slug} 的 {field}）");
+                assert_ne!(
+                    s, "sched-future",
+                    "未到点 scheduled 不应作相邻项（{slug} 的 {field}）"
+                );
             }
         }
     }
@@ -261,7 +264,11 @@ async fn drafts_and_scheduled_visibility_in_neighbors() {
     // 时间序：最新(09-20) → 中间(08-15) → 到点(08-01) → 最老(07-08)
     let due = ("未到点定时".to_string(), "sched-future".to_string());
     let d = get_json(&c, &format!("{base}/api/posts/{}", middle.1)).await;
-    assert_eq!(nav_of(&d, "prev_post"), Some(due.clone()), "到点的 scheduled 应作 prev");
+    assert_eq!(
+        nav_of(&d, "prev_post"),
+        Some(due.clone()),
+        "到点的 scheduled 应作 prev"
+    );
     assert_eq!(nav_of(&d, "next_post"), Some(newest.clone()));
     let d = get_json(&c, &format!("{base}/api/posts/{}", oldest.1)).await;
     assert_eq!(nav_of(&d, "next_post"), Some(due.clone()));

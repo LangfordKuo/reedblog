@@ -113,7 +113,12 @@ async fn crawler_get_raw(
     c: &reqwest::Client,
     url: String,
 ) -> (reqwest::StatusCode, String, String) {
-    let r = c.get(url).header("user-agent", CRAWLER_UA).send().await.unwrap();
+    let r = c
+        .get(url)
+        .header("user-agent", CRAWLER_UA)
+        .send()
+        .await
+        .unwrap();
     let status = r.status();
     let ct = r
         .headers()
@@ -128,7 +133,10 @@ async fn crawler_get_raw(
 async fn crawler_get(c: &reqwest::Client, url: String) -> (reqwest::StatusCode, String) {
     let (status, ct, body) = crawler_get_raw(c, url).await;
     assert_eq!(status, 200, "应 200: {body}");
-    assert!(ct.starts_with("text/html"), "Content-Type 应为 text/html: {ct}");
+    assert!(
+        ct.starts_with("text/html"),
+        "Content-Type 应为 text/html: {ct}"
+    );
     assert!(ct.contains("charset=utf-8"), "应声明 UTF-8: {ct}");
     (status, body)
 }
@@ -183,23 +191,32 @@ async fn crawler_gets_og_html_and_browser_gets_redirect() {
     assert_eq!(status, 200);
     // 标题/描述 HTML 转义（原始 <script> 不得出现）
     assert!(
-        html.contains("<title>OG &lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; 测试 - 测试博客</title>"),
+        html.contains(
+            "<title>OG &lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; 测试 - 测试博客</title>"
+        ),
         "title 未按预期转义: {html}"
     );
     assert!(html.contains(r#"<meta property="og:title" content="OG &lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; 测试">"#));
-    assert!(html.contains(r#"<meta property="og:description" content="描述 &amp; &lt;b&gt;加粗&lt;/b&gt;">"#));
+    assert!(html.contains(
+        r#"<meta property="og:description" content="描述 &amp; &lt;b&gt;加粗&lt;/b&gt;">"#
+    ));
     assert!(!html.contains("<script>alert"), "原始 script 未转义");
     // canonical / og:url / og:type
-    assert!(html.contains(r#"<link rel="canonical" href="https://blog.example.com/posts/og-post">"#));
+    assert!(
+        html.contains(r#"<link rel="canonical" href="https://blog.example.com/posts/og-post">"#)
+    );
     // RSS 自动发现（非 JS 爬虫也能发现 feed）
     assert!(html.contains(
         r#"<link rel="alternate" type="application/rss+xml" href="https://blog.example.com/api/feed.xml">"#
     ));
-    assert!(html.contains(r#"<meta property="og:url" content="https://blog.example.com/posts/og-post">"#));
+    assert!(html
+        .contains(r#"<meta property="og:url" content="https://blog.example.com/posts/og-post">"#));
     assert!(html.contains(r#"<meta property="og:type" content="article">"#));
     assert!(html.contains(r#"<meta property="og:site_name" content="测试博客">"#));
     // 正文第一张图（跳过代码块）成为 og:image，相对 URL 补绝对
-    assert!(html.contains(r#"<meta property="og:image" content="https://blog.example.com/api/uploads/ab/cd.png">"#));
+    assert!(html.contains(
+        r#"<meta property="og:image" content="https://blog.example.com/api/uploads/ab/cd.png">"#
+    ));
     assert!(!html.contains("in-code.png"), "代码块内的图片不得被选中");
     assert!(!html.contains("second.png"), "只取第一张图");
     assert!(html.contains(r#"content="summary_large_image""#));
@@ -350,7 +367,10 @@ async fn og_image_fallback_chain_and_settings_validation() {
     .await;
     let (_, html) = crawler_get(&c, format!("{base}/posts/has-image")).await;
     assert!(html.contains(r#"content="https://cdn.example.com/a.jpg""#));
-    assert!(!html.contains("fallback.png"), "正文图应优先于站点 og_image");
+    assert!(
+        !html.contains("fallback.png"),
+        "正文图应优先于站点 og_image"
+    );
 
     // 清空 og_image（空串允许）→ 无图文章不再含 og:image
     let r = put_settings(&c, &base, &token, json!({"og_image": ""})).await;
@@ -408,13 +428,18 @@ async fn page_og_html_and_disabled_404() {
     let (status, html) = crawler_get(&c, format!("{base}/pages/about-us")).await;
     assert_eq!(status, 200);
     assert!(html.contains("<title>关于 &lt;我们&gt; - 测试博客</title>"));
-    assert!(html.contains(r#"<link rel="canonical" href="https://blog.example.com/pages/about-us">"#));
+    assert!(
+        html.contains(r#"<link rel="canonical" href="https://blog.example.com/pages/about-us">"#)
+    );
     assert!(html.contains(
         r#"<link rel="alternate" type="application/rss+xml" href="https://blog.example.com/api/feed.xml">"#
     ));
     assert!(html.contains(r#"<meta property="og:type" content="website">"#));
     // 页面无 excerpt：描述取正文纯文本截断（含正文文字、不含 Markdown 标记）
-    assert!(html.contains(r#"content="标题 这是一段正文说明。""#), "{html}");
+    assert!(
+        html.contains(r#"content="标题 这是一段正文说明。""#),
+        "{html}"
+    );
     assert!(html.contains(r#""@type":"WebPage""#));
 
     // 停用 → 404

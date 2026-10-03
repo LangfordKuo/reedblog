@@ -58,9 +58,10 @@ pub async fn admin_export_backup(
     });
 
     let stamp = chrono::Utc::now().format("%Y%m%d%H%M%S");
-    let disposition =
-        HeaderValue::from_str(&format!("attachment; filename=\"reedblog-backup-{stamp}.zip\""))
-            .map_err(|_| ApiError::internal("生成下载头失败"))?;
+    let disposition = HeaderValue::from_str(&format!(
+        "attachment; filename=\"reedblog-backup-{stamp}.zip\""
+    ))
+    .map_err(|_| ApiError::internal("生成下载头失败"))?;
     let content_length = HeaderValue::from_str(&size.to_string())
         .map_err(|_| ApiError::internal("生成下载头失败"))?;
 

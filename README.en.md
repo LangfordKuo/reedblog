@@ -204,17 +204,35 @@ reedblog/
 ## Development
 
 ```bash
-# Backend: unit tests + integration tests (full API flows and extensibility acceptance)
+# Backend: format check + unit tests + integration tests (full API flows and extensibility acceptance)
 cd backend
-cargo test
+cargo fmt --check
+cargo test --all-targets
 # Optionally generate example plugin/theme zips into tests/fixtures/
 cargo test --test extensibility generate_fixtures -- --ignored
 
-# Frontend: type checking and production build
+# Frontend: type checking, production build and unit tests
 cd frontend
+npm ci
 npm run typecheck     # tsc --noEmit
 npm run build         # tsc --noEmit && vite build
+npm test              # vitest run (pure-function and DOM unit tests under src/lib)
+npm run test:watch    # vitest watch mode for local development
 ```
+
+### CI and tests
+
+On every push or pull request targeting `main`, GitHub Actions
+([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs two jobs in parallel:
+
+- **Backend (Rust)**: `cargo fmt --check` gate + `cargo test --all-targets`;
+  tests use temporary SQLite databases and need no external services or secrets.
+- **Frontend (Node 24)**: `npm ci` → `npx tsc --noEmit` → `npm run build` → `npm test`
+  (vitest + jsdom; cases live in `frontend/src/lib/*.test.ts` and cover the diff engine,
+  math source preprocessing, TOC extraction, formatting helpers and API rate-limit error parsing).
+
+No secrets are required. Workflow triggers are limited to `backend/**`, `frontend/**`
+and `.github/workflows/**`, and duplicate runs on the same branch are cancelled automatically.
 
 Port conventions: backend 3000 (configurable via `[server]` in config.toml);
 frontend dev server 5173 with `/api` proxied to the backend.

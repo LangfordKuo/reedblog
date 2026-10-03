@@ -4,8 +4,8 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use sqlx::any::AnyRow;
-use sqlx::{AnyConnection, AnyPool};
 use sqlx::Row;
+use sqlx::{AnyConnection, AnyPool};
 
 use crate::error::{ApiError, ApiResult, ValidJson};
 use crate::models::{
@@ -144,7 +144,11 @@ async fn insert_revision(
 }
 
 /// 读取单条修订（含完整正文）；不存在或不属于该文章 → None（调用方映射 404）
-async fn load_revision(pool: &AnyPool, post_id: i64, rev_id: i64) -> ApiResult<Option<PostRevision>> {
+async fn load_revision(
+    pool: &AnyPool,
+    post_id: i64,
+    rev_id: i64,
+) -> ApiResult<Option<PostRevision>> {
     let row = sqlx::query(
         "SELECT id, post_id, title, content_md, excerpt, created_at FROM post_revisions \
          WHERE id = ? AND post_id = ?",
@@ -533,9 +537,8 @@ pub async fn admin_update_post(
     // 内容变化判定（契约「文章修订历史」）：用 UPDATE 前已读到的当前行比对归一化后的
     // title/content_md/excerpt（不用 SQL 的 != 技巧）；未变化（如只改 status/category/tags）
     // 不新增修订，PATCH sticky 等操作根本不经过这里
-    let content_changed = title != existing.title
-        || content_md != existing.content_md
-        || excerpt != existing.excerpt;
+    let content_changed =
+        title != existing.title || content_md != existing.content_md || excerpt != existing.excerpt;
 
     // 更新与（内容变化时的）插图修订同一事务：避免更新成功但快照丢失
     let mut tx = pool.begin().await?;
@@ -853,7 +856,15 @@ pub async fn admin_restore_post_revision(
     .bind(id)
     .execute(&mut *tx)
     .await?;
-    insert_revision(&mut *tx, id, &rev.title, &rev.content_md, &rev.excerpt, &now).await?;
+    insert_revision(
+        &mut *tx,
+        id,
+        &rev.title,
+        &rev.content_md,
+        &rev.excerpt,
+        &now,
+    )
+    .await?;
     tx.commit().await?;
 
     let post = load_post_admin(&pool, id)

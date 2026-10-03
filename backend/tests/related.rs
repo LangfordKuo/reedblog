@@ -144,12 +144,7 @@ async fn related(c: &reqwest::Client, base: &str, slug: &str, query: &str) -> Ve
 }
 
 /// GET 相关文章接口：返回 (状态码, JSON)
-async fn related_status(
-    c: &reqwest::Client,
-    base: &str,
-    slug: &str,
-    query: &str,
-) -> (u16, Value) {
+async fn related_status(c: &reqwest::Client, base: &str, slug: &str, query: &str) -> (u16, Value) {
     let r = c
         .get(format!("{base}/api/posts/{slug}/related{query}"))
         .send()
@@ -422,7 +417,11 @@ async fn drafts_and_scheduled_visibility() {
 
     // 到点前：只有普通 published 出现
     let items = related(&c, &base, "vis-target", "").await;
-    assert_eq!(slugs(&items), vec!["vis-pub"], "草稿与未到点 scheduled 不应出现");
+    assert_eq!(
+        slugs(&items),
+        vec!["vis-pub"],
+        "草稿与未到点 scheduled 不应出现"
+    );
 
     // 拨到过去 → 到点可见，按 published_at DESC 排在正常发布之后
     db_set_published_at(&db_url, due_id, "2020-01-01T00:00:00Z").await;
@@ -568,7 +567,14 @@ async fn limit_default_cap_and_validation() {
     assert_eq!(slugs(&items), full[..5].to_vec(), "带空白应合法");
 
     // 越界/非数字 → 422 validation_error
-    for q in ["?limit=0", "?limit=11", "?limit=-1", "?limit=abc", "?limit=2.5", "?limit="] {
+    for q in [
+        "?limit=0",
+        "?limit=11",
+        "?limit=-1",
+        "?limit=abc",
+        "?limit=2.5",
+        "?limit=",
+    ] {
         let (st, v) = related_status(&c, &base, "limit-target", q).await;
         assert_eq!(st, 422, "{q} 应 422: {v}");
         assert_eq!(v["error"]["code"], "validation_error", "{q}");

@@ -270,9 +270,7 @@ mod tests {
         assert!(a.check_and_record_comment("1.1.1.1|post|1").is_ok());
         // 再过短窗口，短窗口不拦，但长窗口（max=2）仍拦下第 3 条
         std::thread::sleep(Duration::from_millis(100));
-        let err = a
-            .check_and_record_comment("1.1.1.1|post|1")
-            .unwrap_err();
+        let err = a.check_and_record_comment("1.1.1.1|post|1").unwrap_err();
         assert!(err >= 1);
     }
 

@@ -234,7 +234,9 @@ async fn db_deleted_at(url: &str, post_id: i64) -> Option<String> {
         .fetch_one(&pool)
         .await
         .unwrap();
-    let v = row.try_get::<Option<String>, _>("deleted_at").unwrap_or(None);
+    let v = row
+        .try_get::<Option<String>, _>("deleted_at")
+        .unwrap_or(None);
     pool.close().await;
     v
 }
@@ -352,13 +354,23 @@ async fn soft_delete_hides_everywhere_and_restore_revives() {
     assert_eq!(s, 200, "软删前管理详情应 200: {before}");
     assert_eq!(before["status"], "published");
     assert_eq!(before["is_sticky"], true);
-    assert!(before["deleted_at"].is_null(), "正常文章 deleted_at 应为 null");
+    assert!(
+        before["deleted_at"].is_null(),
+        "正常文章 deleted_at 应为 null"
+    );
     let before_published_at = before["published_at"].clone();
     let before_updated_at = before["updated_at"].clone();
     assert_eq!(before["category_id"].as_i64().unwrap(), cat_id);
     assert_eq!(before["slug"], "trash-p1");
 
-    let (_, list0) = json_req(&c, "GET", &format!("{base}/api/posts?per_page=100"), None, None).await;
+    let (_, list0) = json_req(
+        &c,
+        "GET",
+        &format!("{base}/api/posts?per_page=100"),
+        None,
+        None,
+    )
+    .await;
     let total0 = list0["total"].as_i64().unwrap();
     let (_, arch0) = json_req(&c, "GET", &format!("{base}/api/archive"), None, None).await;
     let archive0 = archive_sum(&arch0);
@@ -383,7 +395,10 @@ async fn soft_delete_hides_everywhere_and_restore_revives() {
         None,
     )
     .await;
-    assert!(slugs_of_arr(&rel0).contains(&"trash-p1".to_string()), "软删前相关文章应含 P1: {rel0}");
+    assert!(
+        slugs_of_arr(&rel0).contains(&"trash-p1".to_string()),
+        "软删前相关文章应含 P1: {rel0}"
+    );
     let (s, feed0) = text_req(&c, &format!("{base}/api/feed.xml")).await;
     assert_eq!(s, 200);
     assert!(feed0.contains("trash-p1"), "软删前 RSS 应含 P1");
@@ -391,9 +406,11 @@ async fn soft_delete_hides_everywhere_and_restore_revives() {
     assert_eq!(s, 200);
     assert!(map0.contains("/posts/trash-p1"), "软删前 sitemap 应含 P1");
     // 相邻链：P2 的前一篇是 P1、P0 的后一篇是 P1
-    let (_, p2_before) = json_req(&c, "GET", &format!("{base}/api/posts/trash-p2"), None, None).await;
+    let (_, p2_before) =
+        json_req(&c, "GET", &format!("{base}/api/posts/trash-p2"), None, None).await;
     assert_eq!(p2_before["prev_post"]["slug"], "trash-p1");
-    let (_, p0_before) = json_req(&c, "GET", &format!("{base}/api/posts/trash-p0"), None, None).await;
+    let (_, p0_before) =
+        json_req(&c, "GET", &format!("{base}/api/posts/trash-p0"), None, None).await;
     assert_eq!(p0_before["next_post"]["slug"], "trash-p1");
 
     // 三个新端点无鉴权 → 401 unauthorized
@@ -441,7 +458,10 @@ async fn soft_delete_hides_everywhere_and_restore_revives() {
         None,
     )
     .await;
-    assert!(!ids_of(&admin_all).contains(&p1_id), "后台列表不得含回收站文章");
+    assert!(
+        !ids_of(&admin_all).contains(&p1_id),
+        "后台列表不得含回收站文章"
+    );
     let (_, admin_pub) = json_req(
         &c,
         "GET",
@@ -463,7 +483,10 @@ async fn soft_delete_hides_everywhere_and_restore_revives() {
     assert_eq!(trash["total"], 1);
     assert!(ids_of(&trash).contains(&p1_id));
     let item = &trash["items"][0];
-    assert!(item["deleted_at"].is_string(), "回收站条目应带 deleted_at: {item}");
+    assert!(
+        item["deleted_at"].is_string(),
+        "回收站条目应带 deleted_at: {item}"
+    );
     assert_eq!(item["status"], "published");
     // 回收站中访问正常后台读写路径 → 404
     for (method, path) in [
@@ -541,7 +564,14 @@ async fn soft_delete_hides_everywhere_and_restore_revives() {
     .await;
     assert_eq!(s, 404, "回收站文章不可取消点赞");
 
-    let (_, list1) = json_req(&c, "GET", &format!("{base}/api/posts?per_page=100"), None, None).await;
+    let (_, list1) = json_req(
+        &c,
+        "GET",
+        &format!("{base}/api/posts?per_page=100"),
+        None,
+        None,
+    )
+    .await;
     assert_eq!(list1["total"].as_i64().unwrap(), total0 - 1);
     assert!(!slugs_of(&list1).contains(&"trash-p1".to_string()));
     let (_, search1) = json_req(&c, "GET", &search_url, None, None).await;
@@ -557,7 +587,10 @@ async fn soft_delete_hides_everywhere_and_restore_revives() {
     let (_, feed1) = text_req(&c, &format!("{base}/api/feed.xml")).await;
     assert!(!feed1.contains("trash-p1"), "回收站文章不应出现在 RSS");
     let (_, map1) = text_req(&c, &format!("{base}/api/sitemap.xml")).await;
-    assert!(!map1.contains("/posts/trash-p1"), "回收站文章不应出现在 sitemap");
+    assert!(
+        !map1.contains("/posts/trash-p1"),
+        "回收站文章不应出现在 sitemap"
+    );
     let (_, rel1) = json_req(
         &c,
         "GET",
@@ -566,11 +599,22 @@ async fn soft_delete_hides_everywhere_and_restore_revives() {
         None,
     )
     .await;
-    assert!(!slugs_of_arr(&rel1).contains(&"trash-p1".to_string()), "相关文章不得含回收站文章");
-    let (_, p2_after) = json_req(&c, "GET", &format!("{base}/api/posts/trash-p2"), None, None).await;
-    assert_eq!(p2_after["prev_post"]["slug"], "trash-p0", "相邻项应跳过回收站文章");
-    let (_, p0_after) = json_req(&c, "GET", &format!("{base}/api/posts/trash-p0"), None, None).await;
-    assert_eq!(p0_after["next_post"]["slug"], "trash-p2", "相邻项应跳过回收站文章");
+    assert!(
+        !slugs_of_arr(&rel1).contains(&"trash-p1".to_string()),
+        "相关文章不得含回收站文章"
+    );
+    let (_, p2_after) =
+        json_req(&c, "GET", &format!("{base}/api/posts/trash-p2"), None, None).await;
+    assert_eq!(
+        p2_after["prev_post"]["slug"], "trash-p0",
+        "相邻项应跳过回收站文章"
+    );
+    let (_, p0_after) =
+        json_req(&c, "GET", &format!("{base}/api/posts/trash-p0"), None, None).await;
+    assert_eq!(
+        p0_after["next_post"]["slug"], "trash-p2",
+        "相邻项应跳过回收站文章"
+    );
 
     // 软删期间数据原样保留（评论 2 / 点赞 1 / 修订 2 / 标签关联 1）
     assert_eq!(db_count_comments(&db_url, p1_id).await, 2);
@@ -584,7 +628,9 @@ async fn soft_delete_hides_everywhere_and_restore_revives() {
         "POST",
         &format!("{base}/api/admin/posts"),
         Some(&token),
-        Some(json!({"title": "冒名顶替", "slug": "trash-p1", "content_md": "x", "status": "draft"})),
+        Some(
+            json!({"title": "冒名顶替", "slug": "trash-p1", "content_md": "x", "status": "draft"}),
+        ),
     )
     .await;
     assert_eq!(s, 409, "软删期间同 slug 新建应 409: {v}");
@@ -600,14 +646,20 @@ async fn soft_delete_hides_everywhere_and_restore_revives() {
     )
     .await;
     assert_eq!(s, 200, "恢复应 200: {restored}");
-    assert!(restored["deleted_at"].is_null(), "恢复后 deleted_at 应为 null");
+    assert!(
+        restored["deleted_at"].is_null(),
+        "恢复后 deleted_at 应为 null"
+    );
     // 只清 deleted_at：内容/状态/置顶/发布时间/分类/标签/updated_at 全不变
     assert_eq!(restored["title"], "回收 P1 目标（改）");
     assert_eq!(restored["content_md"], "P1 正文含 回收专属词XYZ 结尾");
     assert_eq!(restored["status"], "published");
     assert_eq!(restored["is_sticky"], true);
     assert_eq!(restored["published_at"], before_published_at);
-    assert_eq!(restored["updated_at"], before_updated_at, "软删/恢复不得更新 updated_at");
+    assert_eq!(
+        restored["updated_at"], before_updated_at,
+        "软删/恢复不得更新 updated_at"
+    );
     assert_eq!(restored["category_id"].as_i64().unwrap(), cat_id);
     assert_eq!(restored["tag_ids"].as_array().unwrap().len(), 1);
     // 恢复后再恢复 → 404
@@ -631,7 +683,11 @@ async fn soft_delete_hides_everywhere_and_restore_revives() {
     )
     .await;
     assert_eq!(s, 200, "恢复后评论列表应可访问");
-    assert_eq!(comments.as_array().unwrap().len(), 2, "评论与回复应原样还在");
+    assert_eq!(
+        comments.as_array().unwrap().len(),
+        2,
+        "评论与回复应原样还在"
+    );
     let (_, like_after) = json_req(
         &c,
         "GET",
@@ -652,8 +708,19 @@ async fn soft_delete_hides_everywhere_and_restore_revives() {
     .await;
     assert_eq!(rev_after.as_array().unwrap().len(), 2, "修订历史应原样还在");
 
-    let (_, list2) = json_req(&c, "GET", &format!("{base}/api/posts?per_page=100"), None, None).await;
-    assert_eq!(list2["total"].as_i64().unwrap(), total0, "恢复后列表计数还原");
+    let (_, list2) = json_req(
+        &c,
+        "GET",
+        &format!("{base}/api/posts?per_page=100"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(
+        list2["total"].as_i64().unwrap(),
+        total0,
+        "恢复后列表计数还原"
+    );
     assert!(slugs_of(&list2).contains(&"trash-p1".to_string()));
     let (_, search2) = json_req(&c, "GET", &search_url, None, None).await;
     assert_eq!(search2["total"], 1, "恢复后搜索重新命中");
@@ -821,12 +888,35 @@ async fn purge_only_from_trash_and_cascades() {
     assert_eq!(s, 404);
 
     // 级联清理：评论（含回复）/点赞/修订/标签关联/文章行全部消失
-    assert_eq!(db_count_comments(&db_url, id).await, 0, "purge 应清理评论与回复");
-    assert_eq!(db_count_by_post(&db_url, "post_likes", id).await, 0, "purge 应清理点赞");
-    assert_eq!(db_count_by_post(&db_url, "post_revisions", id).await, 0, "purge 应清理修订");
-    assert_eq!(db_count_by_post(&db_url, "post_tags", id).await, 0, "purge 应清理标签关联");
+    assert_eq!(
+        db_count_comments(&db_url, id).await,
+        0,
+        "purge 应清理评论与回复"
+    );
+    assert_eq!(
+        db_count_by_post(&db_url, "post_likes", id).await,
+        0,
+        "purge 应清理点赞"
+    );
+    assert_eq!(
+        db_count_by_post(&db_url, "post_revisions", id).await,
+        0,
+        "purge 应清理修订"
+    );
+    assert_eq!(
+        db_count_by_post(&db_url, "post_tags", id).await,
+        0,
+        "purge 应清理标签关联"
+    );
     assert_eq!(db_count_posts(&db_url, id).await, 0, "purge 应删除文章行");
-    let (s, _) = json_req(&c, "GET", &format!("{base}/api/admin/posts/{id}"), Some(&token), None).await;
+    let (s, _) = json_req(
+        &c,
+        "GET",
+        &format!("{base}/api/admin/posts/{id}"),
+        Some(&token),
+        None,
+    )
+    .await;
     assert_eq!(s, 404);
     let (s, _) = json_req(&c, "GET", &format!("{base}/api/posts/purge-p1"), None, None).await;
     assert_eq!(s, 404);
@@ -901,9 +991,23 @@ async fn scheduled_in_trash_stays_hidden_even_when_due() {
     db_set_published_at(&db_url, id, &past).await;
 
     // 到点但仍在回收站 → 所有公开路径不可见
-    let (s, _) = json_req(&c, "GET", &format!("{base}/api/posts/trash-sched"), None, None).await;
+    let (s, _) = json_req(
+        &c,
+        "GET",
+        &format!("{base}/api/posts/trash-sched"),
+        None,
+        None,
+    )
+    .await;
     assert_eq!(s, 404, "回收站中的 scheduled 到点也不可见");
-    let (_, list) = json_req(&c, "GET", &format!("{base}/api/posts?per_page=100"), None, None).await;
+    let (_, list) = json_req(
+        &c,
+        "GET",
+        &format!("{base}/api/posts?per_page=100"),
+        None,
+        None,
+    )
+    .await;
     assert!(!slugs_of(&list).contains(&"trash-sched".to_string()));
     let (_, search) = json_req(
         &c,
@@ -943,6 +1047,13 @@ async fn scheduled_in_trash_stays_hidden_even_when_due() {
     .await;
     assert_eq!(s, 200);
     assert_eq!(restored["status"], "scheduled", "恢复不改状态");
-    let (s, detail) = json_req(&c, "GET", &format!("{base}/api/posts/trash-sched"), None, None).await;
+    let (s, detail) = json_req(
+        &c,
+        "GET",
+        &format!("{base}/api/posts/trash-sched"),
+        None,
+        None,
+    )
+    .await;
     assert_eq!(s, 200, "恢复到点后应立即公开可见: {detail}");
 }

@@ -106,10 +106,9 @@ impl IntoResponse for ApiError {
         });
         let mut resp = (self.status, Json(body)).into_response();
         for (name, value) in &self.headers {
-            if let (Ok(name), Ok(value)) = (
-                name.parse::<HeaderName>(),
-                HeaderValue::from_str(value),
-            ) {
+            if let (Ok(name), Ok(value)) =
+                (name.parse::<HeaderName>(), HeaderValue::from_str(value))
+            {
                 resp.headers_mut().insert(name, value);
             }
         }

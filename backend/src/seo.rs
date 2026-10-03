@@ -107,7 +107,11 @@ pub fn absolutize(base: &str, url: &str) -> Option<String> {
     if url.is_empty() {
         return None;
     }
-    url::Url::parse(base).ok()?.join(url).ok().map(|u| u.to_string())
+    url::Url::parse(base)
+        .ok()?
+        .join(url)
+        .ok()
+        .map(|u| u.to_string())
 }
 
 /// 纯文本按非空白字符数的字数估算（JSON-LD wordCount；CJK 场景下近似「字」）
@@ -437,7 +441,9 @@ mod tests {
             image: Some("https://x.dev/a.png"),
             json_ld: &json_ld,
         });
-        assert!(html.contains("<title>标题 &lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; - 站点</title>"));
+        assert!(html.contains(
+            "<title>标题 &lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; - 站点</title>"
+        ));
         // RSS 自动发现：base 尾斜杠不会造成双斜杠
         assert!(html.contains(
             r#"<link rel="alternate" type="application/rss+xml" href="https://x.dev/api/feed.xml">"#

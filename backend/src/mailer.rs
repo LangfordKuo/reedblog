@@ -92,7 +92,9 @@ pub async fn load(pool: &AnyPool) -> ApiResult<SmtpSettings> {
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| TLS_STARTTLS.to_string());
     Ok(SmtpSettings {
-        enabled: get(KEY_ENABLED).map(|v| v.trim() == "true").unwrap_or(false),
+        enabled: get(KEY_ENABLED)
+            .map(|v| v.trim() == "true")
+            .unwrap_or(false),
         host: get(KEY_HOST).unwrap_or_default(),
         // 存量非法值（理论上写不进来）回退默认端口，避免后续 as u16 出错
         port: get(KEY_PORT)
@@ -172,7 +174,11 @@ pub fn validate(s: &SmtpSettings) -> ApiResult<()> {
     len_ok(&s.from_email, 255, "发件邮箱")?;
     len_ok(&s.to_email, 255, "收件邮箱")?;
 
-    if !s.host.is_empty() && s.host.chars().any(|c| c.is_whitespace() || c == '/' || c == ':') {
+    if !s.host.is_empty()
+        && s.host
+            .chars()
+            .any(|c| c.is_whitespace() || c == '/' || c == ':')
+    {
         return Err(ApiError::validation(
             "SMTP 主机不能包含空白、'/' 或 ':'（只填主机名或 IP）",
         ));
@@ -271,14 +277,14 @@ fn build_transport(
     let host = smtp.host.trim();
     let builder = match smtp.tls.as_str() {
         TLS_IMPLICIT => AsyncSmtpTransport::<Tokio1Executor>::relay(host),
-        TLS_NONE => Ok(AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(host)),
+        TLS_NONE => Ok(AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(
+            host,
+        )),
         // 其余（含存量异常值）按默认 starttls 处理；写库路径已被 validate 拦住
         _ => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(host),
     }
     .map_err(|e| format!("SMTP 连接配置失败: {e}"))?;
-    let mut builder = builder
-        .port(smtp.port as u16)
-        .timeout(Some(SMTP_TIMEOUT));
+    let mut builder = builder.port(smtp.port as u16).timeout(Some(SMTP_TIMEOUT));
     if !smtp.username.trim().is_empty() {
         builder = builder.credentials(Credentials::new(
             smtp.username.trim().to_string(),
@@ -375,7 +381,9 @@ async fn notify_comment(
     headers: &HeaderMap,
     notice: CommentNotice,
 ) -> Result<(), String> {
-    let (pool, _db_type) = require_pool(state).await.map_err(|_| "站点未安装".to_string())?;
+    let (pool, _db_type) = require_pool(state)
+        .await
+        .map_err(|_| "站点未安装".to_string())?;
     let smtp = load(&pool).await.map_err(|e| e.message)?;
     if !smtp.enabled {
         // 契约：enabled=false 静默跳过，不建立任何 SMTP 连接
@@ -388,7 +396,9 @@ async fn notify_comment(
         return Ok(());
     }
 
-    let site = crate::settings::load(&pool, state).await.map_err(|e| e.message)?;
+    let site = crate::settings::load(&pool, state)
+        .await
+        .map_err(|e| e.message)?;
     // base_url 三级优先与 RSS/sitemap 相同（站点设置 → config.toml → 请求头）
     let base = site_base_url(&site.base_url, &state.configured_base_url(), headers);
     let title = target_title(&pool, &notice.target_type, notice.target_id)
@@ -400,7 +410,11 @@ async fn notify_comment(
         "posts"
     };
     let url = format!("{base}/{path}/{}", urlencoding::encode(&notice.slug));
-    let kind = if notice.is_reply { "新回复" } else { "新评论" };
+    let kind = if notice.is_reply {
+        "新回复"
+    } else {
+        "新评论"
+    };
     let target_label = if notice.target_type == "page" {
         "页面"
     } else {
@@ -483,7 +497,14 @@ mod tests {
         s.tls = "ssl".to_string();
         assert!(validate(&s).is_err());
 
-        for bad in ["not-an-email", "a@b", "a b@c.com", "@example.com", "a@.com", "a@x..com"] {
+        for bad in [
+            "not-an-email",
+            "a@b",
+            "a b@c.com",
+            "@example.com",
+            "a@.com",
+            "a@x..com",
+        ] {
             let mut s = base();
             s.to_email = bad.to_string();
             assert!(validate(&s).is_err(), "非法收件邮箱应被拒绝: {bad}");

@@ -294,7 +294,14 @@ async fn revisions_only_added_when_content_changes() {
     let base_url = format!("{base}/api/admin/posts/{id}");
 
     // 第 1 次修改：只改标题
-    let (s, _) = json_req(&c, "PUT", &base_url, Some(&token), Some(json!({"title": "T1"}))).await;
+    let (s, _) = json_req(
+        &c,
+        "PUT",
+        &base_url,
+        Some(&token),
+        Some(json!({"title": "T1"})),
+    )
+    .await;
     assert_eq!(s, 200);
     let (_, list) = list_revisions(&c, &base, Some(&token), id).await;
     assert_eq!(list.as_array().unwrap().len(), 2);
@@ -311,7 +318,11 @@ async fn revisions_only_added_when_content_changes() {
     .await;
     assert_eq!(s, 200);
     let (_, list) = list_revisions(&c, &base, Some(&token), id).await;
-    assert_eq!(list.as_array().unwrap().len(), 3, "改 2 次后共 3 条: {list}");
+    assert_eq!(
+        list.as_array().unwrap().len(),
+        3,
+        "改 2 次后共 3 条: {list}"
+    );
     assert_eq!(titles(&list), vec!["T1", "T1", "T0"], "应按时间/id 倒序");
     let chars: Vec<i64> = list
         .as_array()
@@ -332,7 +343,14 @@ async fn revisions_only_added_when_content_changes() {
     .await;
     assert_eq!(s, 200);
     // 只改 status（发布）→ 不新增
-    let (s, _) = json_req(&c, "PUT", &base_url, Some(&token), Some(json!({"status": "published"}))).await;
+    let (s, _) = json_req(
+        &c,
+        "PUT",
+        &base_url,
+        Some(&token),
+        Some(json!({"status": "published"})),
+    )
+    .await;
     assert_eq!(s, 200);
     // 行内 PATCH 置顶 → 不新增
     let (s, _) = json_req(
@@ -449,14 +467,7 @@ async fn restore_writes_back_content_and_adds_revision() {
     assert_ne!(restored["updated_at"], Value::Null);
 
     // 前台立即生效（公开详情返回恢复后的正文）
-    let (s, public) = json_req(
-        &c,
-        "GET",
-        &format!("{base}/api/posts/{slug}"),
-        None,
-        None,
-    )
-    .await;
+    let (s, public) = json_req(&c, "GET", &format!("{base}/api/posts/{slug}"), None, None).await;
     assert_eq!(s, 200);
     assert_eq!(public["content_md"], "内容A");
 
@@ -516,7 +527,10 @@ async fn restore_writes_back_content_and_adds_revision() {
         None,
     )
     .await;
-    assert_eq!(other_after["content_md"], "其他内容", "404 的恢复不得改动文章");
+    assert_eq!(
+        other_after["content_md"], "其他内容",
+        "404 的恢复不得改动文章"
+    );
 }
 
 // ---------- 4. 保留上限：超过 20 条裁剪最旧 ----------
@@ -557,7 +571,11 @@ async fn retention_keeps_latest_20() {
     assert_eq!(arr.len(), 20, "每篇最多保留 20 条");
     let ts = titles(&list);
     assert_eq!(ts.first().unwrap(), "标题25", "最新一条应是最后一次保存");
-    assert_eq!(ts.last().unwrap(), "标题6", "最旧的 6 条（初始 + 1~5）应被裁掉");
+    assert_eq!(
+        ts.last().unwrap(),
+        "标题6",
+        "最旧的 6 条（初始 + 1~5）应被裁掉"
+    );
     assert_eq!(
         arr[19]["content_chars"].as_i64().unwrap(),
         "正文6".chars().count() as i64
@@ -610,7 +628,11 @@ async fn deleting_post_cascades_revisions() {
     )
     .await;
     assert_eq!(s, 204, "彻底删除应 204");
-    assert_eq!(db_count_revisions(&url, id).await, 0, "purge 应连带清理修订");
+    assert_eq!(
+        db_count_revisions(&url, id).await,
+        0,
+        "purge 应连带清理修订"
+    );
     let (s, _) = list_revisions(&c, &base, Some(&token), id).await;
     assert_eq!(s, 404, "文章不存在后修订列表应 404");
 }

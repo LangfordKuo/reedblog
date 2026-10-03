@@ -204,17 +204,35 @@ reedblog/
 ## 开发
 
 ```bash
-# 后端：单元测试 + 集成测试（API 全链路与扩展系统验收）
+# 后端：格式检查 + 单元测试 + 集成测试（API 全链路与扩展系统验收）
 cd backend
-cargo test
+cargo fmt --check
+cargo test --all-targets
 # 生成示例插件/主题 zip 到 tests/fixtures/（可选）
 cargo test --test extensibility generate_fixtures -- --ignored
 
-# 前端：类型检查与生产构建
+# 前端：类型检查、生产构建与单元测试
 cd frontend
+npm ci
 npm run typecheck     # tsc --noEmit
 npm run build         # tsc --noEmit && vite build
+npm test              # vitest run（src/lib 下的纯函数与 DOM 单测）
+npm run test:watch    # vitest 监听模式（本地开发用）
 ```
+
+### CI 与测试
+
+推送或提 PR 到 `main` 时，GitHub Actions（[.github/workflows/ci.yml](.github/workflows/ci.yml)）
+并行运行两个 job：
+
+- **Backend (Rust)**：`cargo fmt --check` 格式门禁 + `cargo test --all-targets`；
+  测试用临时 SQLite 数据库，不依赖任何外部服务或密钥。
+- **Frontend (Node 24)**：`npm ci` → `npx tsc --noEmit` → `npm run build` → `npm test`
+  （vitest + jsdom，用例位于 `frontend/src/lib/*.test.ts`，覆盖 diff / 数学公式预处理 /
+  TOC 提取 / 格式化工具 / API 限流错误解析）。
+
+CI 无需配置密钥；触发路径限定为 `backend/**`、`frontend/**`、`.github/workflows/**`，
+同一分支的重复触发会自动取消上一次运行。
 
 端口约定：后端 3000（config.toml `[server]` 可改）；前端 dev server 5173，
 `/api` 代理到后端。

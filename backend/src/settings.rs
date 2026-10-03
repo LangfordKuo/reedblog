@@ -141,7 +141,10 @@ fn to_pairs(s: &SiteSettings) -> [(&'static str, String); 10] {
         (KEY_PER_PAGE, s.per_page.to_string()),
         (KEY_BASE_URL, s.base_url.clone()),
         (KEY_OG_IMAGE, s.og_image.clone()),
-        (KEY_COMMENT_BLOCKED_KEYWORDS, s.comment_blocked_keywords.clone()),
+        (
+            KEY_COMMENT_BLOCKED_KEYWORDS,
+            s.comment_blocked_keywords.clone(),
+        ),
         (KEY_COMMENT_MAX_LINKS, s.comment_max_links.to_string()),
     ]
 }
@@ -327,7 +330,11 @@ mod tests {
             s.og_image = bad.to_string();
             assert!(validate(&s).is_err(), "非法 og_image 应被拒绝: {bad}");
         }
-        for ok in ["", "/api/uploads/ab/cd.png", "https://cdn.example.com/a.jpg"] {
+        for ok in [
+            "",
+            "/api/uploads/ab/cd.png",
+            "https://cdn.example.com/a.jpg",
+        ] {
             let mut s = base();
             s.og_image = ok.to_string();
             assert!(validate(&s).is_ok(), "合法 og_image 应通过: {ok}");
@@ -337,7 +344,10 @@ mod tests {
         for bad in [-1, 101] {
             let mut s = base();
             s.comment_max_links = bad;
-            assert!(validate(&s).is_err(), "越界 comment_max_links 应被拒绝: {bad}");
+            assert!(
+                validate(&s).is_err(),
+                "越界 comment_max_links 应被拒绝: {bad}"
+            );
         }
         for ok in [0, 3, 100] {
             let mut s = base();

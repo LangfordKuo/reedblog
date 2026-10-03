@@ -178,7 +178,10 @@ fn webp_dimensions(b: &[u8]) -> Option<(u32, u32)> {
         if payload.len() < 10 || payload[3..6] != [0x9d, 0x01, 0x2a] {
             return None;
         }
-        return Some((le_u16(&payload[6..8]) & 0x3FFF, le_u16(&payload[8..10]) & 0x3FFF));
+        return Some((
+            le_u16(&payload[6..8]) & 0x3FFF,
+            le_u16(&payload[8..10]) & 0x3FFF,
+        ));
     }
     None
 }
@@ -471,7 +474,16 @@ mod tests {
         assert_eq!(png_dimensions(&png), Some((3, 2)));
         assert_eq!(image_dimensions(ImageKind::Png, &png), Some((3, 2)));
         // 只有 magic 头 + 零填充的伪 PNG：尺寸为 0 → None（存 NULL）
-        assert_eq!(image_dimensions(ImageKind::Png, &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]), None);
+        assert_eq!(
+            image_dimensions(
+                ImageKind::Png,
+                &[
+                    0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0
+                ]
+            ),
+            None
+        );
         assert_eq!(image_dimensions(ImageKind::Png, b"short"), None);
     }
 
@@ -535,7 +547,10 @@ mod tests {
         assert_eq!(sanitize_upload_rel("..\\secret.txt"), None);
         assert_eq!(sanitize_upload_rel("2026/../../secret.txt"), None);
         assert_eq!(sanitize_upload_rel("C:/windows/win.ini"), None);
-        assert_eq!(sanitize_upload_rel("/etc/passwd"), Some(std::path::PathBuf::from("etc/passwd")));
+        assert_eq!(
+            sanitize_upload_rel("/etc/passwd"),
+            Some(std::path::PathBuf::from("etc/passwd"))
+        );
         // 空路径与纯 `.` 段 → None
         assert_eq!(sanitize_upload_rel(""), None);
         assert_eq!(sanitize_upload_rel("./."), None);

@@ -338,9 +338,7 @@ fn find_math_close(chars: &[char], from: usize) -> Option<usize> {
     while j < chars.len() {
         if chars[j] == '$' && !is_escaped_chars(chars, j) {
             let run = dollar_run(chars, j);
-            let after_digit = chars
-                .get(j + run)
-                .map_or(false, |c| c.is_ascii_digit());
+            let after_digit = chars.get(j + run).map_or(false, |c| c.is_ascii_digit());
             if !(after_digit && is_currency_dollar(chars, j)) {
                 return Some(j);
             }
@@ -392,12 +390,8 @@ fn strip_inline_math(s: &str) -> String {
         if chars[i] == '$' && !is_escaped_chars(&chars, i) {
             let run = dollar_run(&chars, i);
             let after = i + run;
-            let openable = chars
-                .get(after)
-                .map_or(false, |c| !c.is_whitespace());
-            let currency = chars
-                .get(after)
-                .map_or(false, |c| c.is_ascii_digit())
+            let openable = chars.get(after).map_or(false, |c| !c.is_whitespace());
+            let currency = chars.get(after).map_or(false, |c| c.is_ascii_digit())
                 && is_currency_dollar(&chars, i);
             if openable && !currency {
                 if let Some(close) = find_math_close(&chars, after) {
@@ -1205,7 +1199,10 @@ mod tests {
 
     #[test]
     fn inline_math_stripped_without_extra_spaces() {
-        assert_eq!(derive_excerpt("质能方程 $E = mc^2$ 很简洁"), "质能方程 很简洁");
+        assert_eq!(
+            derive_excerpt("质能方程 $E = mc^2$ 很简洁"),
+            "质能方程 很简洁"
+        );
         assert_eq!(md_to_plain_text("前 $x$ 后"), "前 后");
         // 数字开头的公式同样是公式（货币防误判不误伤）
         assert_eq!(derive_excerpt("面积 $2\\pi r$ 成立"), "面积 成立");
@@ -1251,14 +1248,19 @@ mod tests {
     #[test]
     fn snippet_free_of_latex_source() {
         // 搜索 snippet 与 excerpt 同源：含公式文章不得出现 LaTeX 源码
-        let md = "# 推导\n\n由 $E = mc^2$ 可得，块级如下：\n\n$$\n\\int_0^1 x^2 dx\n$$\n\n结论见上文";
+        let md =
+            "# 推导\n\n由 $E = mc^2$ 可得，块级如下：\n\n$$\n\\int_0^1 x^2 dx\n$$\n\n结论见上文";
         let plain = md_to_plain_text(md);
         let s = make_snippet(&plain, &["结论".to_string()], "回退");
         assert!(s.contains("结论"), "{s}");
         for src in ["\\", "int_0", "^2", "frac", "E = mc", "dx"] {
             assert!(!s.contains(src), "snippet 不应含公式源码 {src}：{s}");
         }
-        assert!(derive_excerpt(md).contains("推导"), "{}", derive_excerpt(md));
+        assert!(
+            derive_excerpt(md).contains("推导"),
+            "{}",
+            derive_excerpt(md)
+        );
     }
 
     #[test]

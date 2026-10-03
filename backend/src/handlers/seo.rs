@@ -194,10 +194,7 @@ pub async fn page_html(
 }
 
 /// GET /robots.txt → text/plain（含后台 Disallow 与 sitemap 声明；base 同款三级优先）
-pub async fn robots_txt(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> ApiResult<Response> {
+pub async fn robots_txt(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Response> {
     if !state.is_installed().await {
         return Err(ApiError::not_installed());
     }

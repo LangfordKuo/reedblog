@@ -166,7 +166,10 @@ async fn uploaded_image_appears_in_media_list() {
     assert_eq!(item["mime"], "image/png");
     assert_eq!(item["width"], 3, "PNG 宽应由图片头解析");
     assert_eq!(item["height"], 2);
-    assert!(item["created_at"].as_str().unwrap().len() >= 20, "RFC3339 时间戳");
+    assert!(
+        item["created_at"].as_str().unwrap().len() >= 20,
+        "RFC3339 时间戳"
+    );
 
     // 图片静态读取仍可用（上传流程未破坏）
     let rel = up["url"].as_str().unwrap();
@@ -198,7 +201,11 @@ async fn duplicate_upload_reuses_record() {
     assert_eq!(a["url"], b["url"], "同内容复用同一存储路径");
     assert_eq!(a["id"], b["id"], "重复上传不新增 media 行，返回既有 id");
 
-    let page: Value = list(&c, &base, Some(&token), "").await.json().await.unwrap();
+    let page: Value = list(&c, &base, Some(&token), "")
+        .await
+        .json()
+        .await
+        .unwrap();
     assert_eq!(page["total"], 1, "重复上传后列表仍只有一行");
 }
 
@@ -265,17 +272,11 @@ async fn delete_removes_record_and_file() {
     let c = reqwest::Client::new();
     let token = setup_installed(&c, &base, tmp.path()).await;
 
-    let up: Value = upload(
-        &c,
-        &base,
-        Some(&token),
-        "gone.png",
-        png_with_dims(6, 7, 12),
-    )
-    .await
-    .json()
-    .await
-    .unwrap();
+    let up: Value = upload(&c, &base, Some(&token), "gone.png", png_with_dims(6, 7, 12))
+        .await
+        .json()
+        .await
+        .unwrap();
     let id = up["id"].as_i64().unwrap();
     let url = up["url"].as_str().unwrap().to_string();
     // 落盘文件确实存在（url 去掉 /api/uploads/ 前缀即相对路径）
@@ -297,7 +298,11 @@ async fn delete_removes_record_and_file() {
     let r = c.get(format!("{base}{url}")).send().await.unwrap();
     assert_eq!(r.status(), 404, "删除后旧 URL 应 404");
 
-    let page: Value = list(&c, &base, Some(&token), "").await.json().await.unwrap();
+    let page: Value = list(&c, &base, Some(&token), "")
+        .await
+        .json()
+        .await
+        .unwrap();
     assert_eq!(page["total"], 0, "删除后记录消失");
 
     // 再删同一 id → 404
@@ -333,7 +338,11 @@ async fn delete_removes_record_and_file() {
         .await
         .unwrap();
     assert_eq!(r.status(), 204, "文件缺失时删记录仍幂等成功");
-    let page: Value = list(&c, &base, Some(&token), "").await.json().await.unwrap();
+    let page: Value = list(&c, &base, Some(&token), "")
+        .await
+        .json()
+        .await
+        .unwrap();
     assert_eq!(page["total"], 0);
 }
 
@@ -355,7 +364,11 @@ async fn delete_cannot_escape_uploads_dir() {
     insert_media_row(tmp.path(), "/api/uploads/2026/../../secret.txt").await;
     insert_media_row(tmp.path(), "/api/uploads/C:/secret.txt").await;
 
-    let page: Value = list(&c, &base, Some(&token), "").await.json().await.unwrap();
+    let page: Value = list(&c, &base, Some(&token), "")
+        .await
+        .json()
+        .await
+        .unwrap();
     let ids: Vec<i64> = page["items"]
         .as_array()
         .unwrap()
@@ -375,7 +388,11 @@ async fn delete_cannot_escape_uploads_dir() {
     }
     assert!(victim.is_file(), "uploads 目录外的文件绝不能被删除");
     assert_eq!(std::fs::read(&victim).unwrap(), b"do not delete");
-    let page: Value = list(&c, &base, Some(&token), "").await.json().await.unwrap();
+    let page: Value = list(&c, &base, Some(&token), "")
+        .await
+        .json()
+        .await
+        .unwrap();
     assert_eq!(page["total"], 0, "记录本身应删掉（文件跳过）");
 }
 
@@ -428,11 +445,18 @@ async fn historical_files_are_scanned_into_list() {
     // 同目录的非图片文件不应成为媒体条目
     std::fs::write(dir.join("notes.txt"), b"not an image").unwrap();
 
-    let page: Value = list(&c, &base, Some(&token), "").await.json().await.unwrap();
+    let page: Value = list(&c, &base, Some(&token), "")
+        .await
+        .json()
+        .await
+        .unwrap();
     assert_eq!(page["total"], 1, "历史图片应被兜底扫描到（非图片不入库）");
     let item = &page["items"][0];
     assert_eq!(item["url"], format!("/api/uploads/2025/12/{hist_name}"));
-    assert_eq!(item["filename"], hist_name, "历史文件原始名缺失，回退存储文件名");
+    assert_eq!(
+        item["filename"], hist_name,
+        "历史文件原始名缺失，回退存储文件名"
+    );
     assert_eq!(item["size"], hist.len() as i64);
     assert_eq!(item["mime"], "image/png");
     assert_eq!(item["width"], 8);
@@ -459,6 +483,10 @@ async fn historical_files_are_scanned_into_list() {
     assert!(!dir.join(hist_name).exists());
 
     // 再次列表：文件已删，不应被扫描复活；notes.txt 仍不入库
-    let page: Value = list(&c, &base, Some(&token), "").await.json().await.unwrap();
+    let page: Value = list(&c, &base, Some(&token), "")
+        .await
+        .json()
+        .await
+        .unwrap();
     assert_eq!(page["total"], 0);
 }

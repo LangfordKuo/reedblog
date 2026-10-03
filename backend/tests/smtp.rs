@@ -112,12 +112,7 @@ async fn create_post(c: &reqwest::Client, base: &str, token: &str, slug: &str) -
 }
 
 /// 更新 SMTP 设置（返回响应）
-async fn put_smtp(
-    c: &reqwest::Client,
-    base: &str,
-    token: &str,
-    body: Value,
-) -> reqwest::Response {
+async fn put_smtp(c: &reqwest::Client, base: &str, token: &str, body: Value) -> reqwest::Response {
     c.put(format!("{base}/api/admin/smtp"))
         .header("Authorization", bearer(token))
         .json(&body)
@@ -163,11 +158,7 @@ impl FakeSmtp {
         let port = listener.local_addr().unwrap().port();
         let mails = Arc::new(Mutex::new(Vec::new()));
         let connections = Arc::new(AtomicUsize::new(0));
-        let handle = tokio::spawn(accept_loop(
-            listener,
-            mails.clone(),
-            connections.clone(),
-        ));
+        let handle = tokio::spawn(accept_loop(listener, mails.clone(), connections.clone()));
         Self {
             port,
             mails,
@@ -218,7 +209,10 @@ async fn accept_loop(
     }
 }
 
-async fn handle_conn(stream: TcpStream, mails: Arc<Mutex<Vec<CapturedMail>>>) -> std::io::Result<()> {
+async fn handle_conn(
+    stream: TcpStream,
+    mails: Arc<Mutex<Vec<CapturedMail>>>,
+) -> std::io::Result<()> {
     let (r, mut w) = stream.into_split();
     let mut reader = BufReader::new(r);
     w.write_all(b"220 reedblog-test ESMTP\r\n").await?;
@@ -240,7 +234,8 @@ async fn handle_conn(stream: TcpStream, mails: Arc<Mutex<Vec<CapturedMail>>>) ->
             mail.recipients.push(line.trim_end().to_string());
             w.write_all(b"250 OK\r\n").await?;
         } else if upper.starts_with("DATA") {
-            w.write_all(b"354 End data with <CR><LF>.<CR><LF>\r\n").await?;
+            w.write_all(b"354 End data with <CR><LF>.<CR><LF>\r\n")
+                .await?;
             let mut buf = Vec::new();
             loop {
                 let mut b = [0u8; 1];
@@ -299,7 +294,10 @@ fn decode_rfc2047(s: &str) -> String {
         let after = &rest[start + "=?utf-8?b?".len()..];
         match after.find("?=") {
             Some(end) => {
-                let b64: String = after[..end].chars().filter(|c| !c.is_whitespace()).collect();
+                let b64: String = after[..end]
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .collect();
                 out.push_str(&base64_decode(&b64));
                 rest = &after[end + 2..];
             }
@@ -345,7 +343,9 @@ fn decode_body(raw: &str) -> String {
         .to_ascii_lowercase();
     if cte.contains("base64") {
         let compact: String = body.chars().filter(|c| !c.is_whitespace()).collect();
-        base64_decode(&compact).trim_end_matches(['.', '\r', '\n']).to_string()
+        base64_decode(&compact)
+            .trim_end_matches(['.', '\r', '\n'])
+            .to_string()
     } else {
         body.replace("=\r\n", "")
             .replace("=\n", "")
@@ -366,7 +366,11 @@ async fn smtp_admin_endpoints_require_auth() {
     // 先安装：未安装时未安装门禁对所有 /api/* 返回 503，会先于鉴权短路
     let _token = setup_installed(&c, &base, tmp.path()).await;
 
-    let r = c.get(format!("{base}/api/admin/smtp")).send().await.unwrap();
+    let r = c
+        .get(format!("{base}/api/admin/smtp"))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), 401);
     assert_eq!(err_code(r).await, "unauthorized");
 
@@ -412,14 +416,20 @@ async fn smtp_settings_roundtrip_and_password_never_returned() {
     assert_eq!(v["tls"], json!("starttls"));
     assert_eq!(v["has_password"], json!(false));
     assert_eq!(v["host"], json!(""));
-    assert!(v["last_result"].is_null(), "从未发送过时 last_result 为 null");
+    assert!(
+        v["last_result"].is_null(),
+        "从未发送过时 last_result 为 null"
+    );
     assert!(v.get("password").is_none(), "响应绝不能有 password 字段");
 
     // 部分更新：只给 8 个字段中的一部分也应成功（缺失保持原值）
     let r = put_smtp(&c, &base, &token, smtp_body(2525, true)).await;
     assert_eq!(r.status(), 200);
     let text = r.text().await.unwrap();
-    assert!(!text.contains("\"password\""), "响应体不得含 password 字段: {text}");
+    assert!(
+        !text.contains("\"password\""),
+        "响应体不得含 password 字段: {text}"
+    );
     let v: Value = serde_json::from_str(&text).unwrap();
     assert_eq!(v["enabled"], json!(true));
     assert_eq!(v["host"], json!("127.0.0.1"));
@@ -454,7 +464,9 @@ async fn smtp_settings_roundtrip_and_password_never_returned() {
     // 且响应体绝不含密码原文。安装向导已写 [smtp] password = ""（字段序最后），
     // 这里截断到该段再重写（避免重复 table header）
     let text = std::fs::read_to_string(&config).unwrap();
-    let idx = text.find("[smtp]").expect("安装后 config.toml 应含 [smtp] 段");
+    let idx = text
+        .find("[smtp]")
+        .expect("安装后 config.toml 应含 [smtp] 段");
     std::fs::write(
         &config,
         format!("{}[smtp]\npassword = \"s3cret-pass\"\n", &text[..idx]),
@@ -669,7 +681,10 @@ async fn comment_and_reply_send_notifications() {
         body.contains(&format!("http://blog.example.test/posts/{slug}")),
         "正文应含站点绝对 URL 文章链接"
     );
-    assert!(body.contains("hello from smtp integration"), "正文应含评论内容");
+    assert!(
+        body.contains("hello from smtp integration"),
+        "正文应含评论内容"
+    );
     assert!(body.contains("alice"), "正文应含评论者名");
     assert!(
         body.contains("http://blog.example.test/admin/comments"),

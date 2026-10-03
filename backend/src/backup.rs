@@ -170,21 +170,66 @@ const POST_REVISIONS_COLS: &[(&str, ColKind)] = cols![
 /// 全部业务表（顺序 = 导入插入顺序；删除时倒序）。
 /// 表中每一列都必须在此列出（禁止 SELECT *：导出/导入/校验共用这一份定义）。
 pub const TABLES: &[TableSpec] = &[
-    TableSpec { name: "categories", columns: CATEGORIES_COLS },
-    TableSpec { name: "tags", columns: TAGS_COLS },
-    TableSpec { name: "users", columns: USERS_COLS },
-    TableSpec { name: "posts", columns: POSTS_COLS },
-    TableSpec { name: "post_tags", columns: POST_TAGS_COLS },
-    TableSpec { name: "comments", columns: COMMENTS_COLS },
-    TableSpec { name: "pages", columns: PAGES_COLS },
-    TableSpec { name: "page_links", columns: PAGE_LINKS_COLS },
-    TableSpec { name: "plugins", columns: PLUGINS_COLS },
-    TableSpec { name: "settings", columns: SETTINGS_COLS },
-    TableSpec { name: "theme_settings", columns: THEME_SETTINGS_COLS },
-    TableSpec { name: "theme_widgets", columns: THEME_WIDGETS_COLS },
-    TableSpec { name: "post_likes", columns: POST_LIKES_COLS },
-    TableSpec { name: "media", columns: MEDIA_COLS },
-    TableSpec { name: "post_revisions", columns: POST_REVISIONS_COLS },
+    TableSpec {
+        name: "categories",
+        columns: CATEGORIES_COLS,
+    },
+    TableSpec {
+        name: "tags",
+        columns: TAGS_COLS,
+    },
+    TableSpec {
+        name: "users",
+        columns: USERS_COLS,
+    },
+    TableSpec {
+        name: "posts",
+        columns: POSTS_COLS,
+    },
+    TableSpec {
+        name: "post_tags",
+        columns: POST_TAGS_COLS,
+    },
+    TableSpec {
+        name: "comments",
+        columns: COMMENTS_COLS,
+    },
+    TableSpec {
+        name: "pages",
+        columns: PAGES_COLS,
+    },
+    TableSpec {
+        name: "page_links",
+        columns: PAGE_LINKS_COLS,
+    },
+    TableSpec {
+        name: "plugins",
+        columns: PLUGINS_COLS,
+    },
+    TableSpec {
+        name: "settings",
+        columns: SETTINGS_COLS,
+    },
+    TableSpec {
+        name: "theme_settings",
+        columns: THEME_SETTINGS_COLS,
+    },
+    TableSpec {
+        name: "theme_widgets",
+        columns: THEME_WIDGETS_COLS,
+    },
+    TableSpec {
+        name: "post_likes",
+        columns: POST_LIKES_COLS,
+    },
+    TableSpec {
+        name: "media",
+        columns: MEDIA_COLS,
+    },
+    TableSpec {
+        name: "post_revisions",
+        columns: POST_REVISIONS_COLS,
+    },
 ];
 
 fn table_spec(name: &str) -> Option<&'static TableSpec> {
@@ -404,7 +449,8 @@ fn write_backup_zip(
 
     // uploads/**：保持相对路径原样复制
     for rel in media {
-        zip.start_file(format!("uploads/{rel}"), opts).map_err(zip_err)?;
+        zip.start_file(format!("uploads/{rel}"), opts)
+            .map_err(zip_err)?;
         let mut src = std::fs::File::open(uploads_root.join(rel))?;
         std::io::copy(&mut src, &mut zip)?;
     }
@@ -457,7 +503,11 @@ pub(crate) async fn build_export(
     .await
     .map_err(|e| ApiError::internal(format!("备份生成任务失败: {e}")))??;
 
-    Ok(ExportFile { tmp, size, exported_at })
+    Ok(ExportFile {
+        tmp,
+        size,
+        exported_at,
+    })
 }
 
 // ---------- 导入 ----------
@@ -588,16 +638,22 @@ fn validate_and_stage(
             if is_dir {
                 // 目录条目：只校验路径，不落盘
                 if !rel_raw.is_empty() && sanitize_upload_rel(rel_raw).is_none() {
-                    return Err(invalid_backup(format!("备份含非法 uploads 路径: {raw_name}")));
+                    return Err(invalid_backup(format!(
+                        "备份含非法 uploads 路径: {raw_name}"
+                    )));
                 }
                 continue;
             }
             let Some(rel) = sanitize_upload_rel(rel_raw) else {
-                return Err(invalid_backup(format!("备份含非法 uploads 路径: {raw_name}")));
+                return Err(invalid_backup(format!(
+                    "备份含非法 uploads 路径: {raw_name}"
+                )));
             };
             let rel = rel.to_string_lossy().replace('\\', "/");
             if !uploads.insert(rel.clone()) {
-                return Err(invalid_backup(format!("备份含重复的 uploads 条目: {raw_name}")));
+                return Err(invalid_backup(format!(
+                    "备份含重复的 uploads 条目: {raw_name}"
+                )));
             }
             let target = staging.join(&rel);
             if let Some(parent) = target.parent() {
@@ -646,11 +702,17 @@ fn validate_and_stage(
         validate_rows(spec, rows)?;
     }
     // 至少一个用户：否则导入后无人能登录（安装即有管理员，正常备份必含 users 行）
-    if data.get("users").map(|rows| rows.is_empty()).unwrap_or(true) {
+    if data
+        .get("users")
+        .map(|rows| rows.is_empty())
+        .unwrap_or(true)
+    {
         return Err(invalid_backup("备份不含任何用户，导入后将无法登录"));
     }
     if manifest.media_files != uploads.len() as i64 {
-        return Err(invalid_backup("manifest 媒体文件数与备份内 uploads 条目不一致"));
+        return Err(invalid_backup(
+            "manifest 媒体文件数与备份内 uploads 条目不一致",
+        ));
     }
 
     Ok((manifest, data, uploads))

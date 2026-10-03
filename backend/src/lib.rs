@@ -222,7 +222,10 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         )
         // 管理：备份与恢复（契约「备份与恢复」条款）：导出 zip 流 / 导入（危险操作，
         // multipart 需 confirm=REPLACE）+ 请求体上限 1 GiB；info 为内存态最近导出信息
-        .route("/admin/backup/export", get(admin_backup::admin_export_backup))
+        .route(
+            "/admin/backup/export",
+            get(admin_backup::admin_export_backup),
+        )
         .route(
             "/admin/backup/import",
             post(admin_backup::admin_import_backup)

@@ -364,7 +364,9 @@ impl SmtpSettingsBody {
     pub fn apply_to(self, base: &crate::mailer::SmtpSettings) -> crate::mailer::SmtpSettings {
         crate::mailer::SmtpSettings {
             enabled: self.enabled.unwrap_or(base.enabled),
-            host: self.host.map_or_else(|| base.host.clone(), |v| v.trim().to_string()),
+            host: self
+                .host
+                .map_or_else(|| base.host.clone(), |v| v.trim().to_string()),
             port: self.port.unwrap_or(base.port),
             username: self
                 .username
