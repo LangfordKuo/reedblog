@@ -94,6 +94,13 @@ export interface ArchiveMonth {
   count: number
 }
 
+// POST /api/admin/uploads 响应（filename 仅回显原始文件名）
+export interface UploadResult {
+  url: string
+  size: number
+  filename: string
+}
+
 // POST /api/install 请求体
 export interface MysqlConfig {
   host: string

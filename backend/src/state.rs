@@ -9,7 +9,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
-use crate::config::{default_plugins_dir, default_themes_dir, Config};
+use crate::config::{
+    default_max_size_mb, default_plugins_dir, default_themes_dir, default_uploads_dir, Config,
+};
 use crate::error::ApiResult;
 use crate::plugins::PluginHost;
 
@@ -44,6 +46,8 @@ struct Inner {
     plugins: PluginHost,
     /// 主题存储根目录（active 的权威来源是 config.toml，目录本身启动时解析一次）
     themes_dir: PathBuf,
+    /// 图片上传存储根目录（config.toml [uploads] dir，启动时解析一次）
+    uploads_dir: PathBuf,
 }
 
 #[derive(Clone)]
@@ -68,12 +72,18 @@ impl AppState {
                 .map(|c| c.themes.dir.clone())
                 .unwrap_or_else(default_themes_dir),
         );
+        let uploads_dir = PathBuf::from(
+            cfg.as_ref()
+                .map(|c| c.uploads.dir.clone())
+                .unwrap_or_else(default_uploads_dir),
+        );
         Self {
             inner: Arc::new(Inner {
                 config_path,
                 runtime: RwLock::new(Runtime::default()),
                 plugins: PluginHost::new(plugins_dir),
                 themes_dir,
+                uploads_dir,
             }),
         }
     }
@@ -90,11 +100,31 @@ impl AppState {
         &self.inner.themes_dir
     }
 
+    pub fn uploads_dir(&self) -> &Path {
+        &self.inner.uploads_dir
+    }
+
     /// config.toml 中当前激活主题 slug（读不到配置时回退 default）
     pub fn active_theme_slug(&self) -> String {
         Config::load(Path::new(&self.inner.config_path))
             .map(|c| c.themes.active)
             .unwrap_or_else(crate::config::default_active_theme)
+    }
+
+    /// 上传图片大小上限（字节）：config.toml [uploads] max_size_mb，
+    /// 读不到配置时回退默认 10MB（每次请求读取，改配置无需重启）
+    pub fn uploads_max_size_bytes(&self) -> usize {
+        let mb = Config::load(Path::new(&self.inner.config_path))
+            .map(|c| c.uploads.max_size_mb)
+            .unwrap_or_else(default_max_size_mb);
+        (mb as usize).saturating_mul(1024 * 1024)
+    }
+
+    /// config.toml [server] base_url（未配置/读不到时为空串；feed/sitemap 用）
+    pub fn configured_base_url(&self) -> String {
+        Config::load(Path::new(&self.inner.config_path))
+            .map(|c| c.server.base_url)
+            .unwrap_or_default()
     }
 
     pub async fn is_installed(&self) -> bool {

@@ -24,6 +24,7 @@ CommentPub   = {id, author_name, content, created_at}
 CommentAdmin = {id, post_id, post_title, author_name, email|null, content,
                 status: "approved"|"hidden", created_at}
 AuthResult   = {token, username, expires_at}
+UploadResult = {url, size: <字节数>, filename: <原始文件名回显>}
 ```
 
 ## 安装向导（未初始化时）
@@ -48,6 +49,26 @@ AuthResult   = {token, username, expires_at}
 - `GET /api/tags` → `[Tag]`（post_count 只统计 published）
 - `GET /api/categories` → `[Category]`（同上）
 - `GET /api/archive` → `[{"year": int, "month": int, "count": int}]`，仅 published，按年月 DESC
+
+上传文件读取（2026-10-03 新增）：
+- `GET /api/uploads/*path` → 已上传图片的静态读取（公开、无需鉴权；不在未安装门禁白名单内，未安装时同样 503）
+  - Content-Type 按扩展名（png/jpg/gif/webp）；响应带 `Cache-Control: public, max-age=31536000, immutable`
+  - 防目录穿越（词法清洗 + canonicalize 物理校验，同 themes assets）；文件不存在/路径非法 → 404
+
+RSS 与 sitemap（2026-10-03 新增）：
+- 站点绝对 URL 来源（feed/sitemap 共用）：config.toml `[server] base_url` 非空则用它（去尾 `/`）；
+  为空则从请求头推导：scheme 取 `X-Forwarded-Proto`（缺省 `http`，仅接受 http/https），
+  host 取 `X-Forwarded-Host` → `Host`（反代场景）
+- `GET /api/feed.xml` → RSS 2.0，Content-Type `application/rss+xml; charset=utf-8`
+  - 最新 20 篇 published 文章，按 published_at DESC
+  - channel 含 title（站点标题）、link（站点绝对 URL）、description（副标题，为空回退标题）
+  - item 含 title、link（`{base}/posts/{slug}`，与前端路由一致）、guid（isPermaLink=true，同 link）、
+    pubDate（RFC 822）、description（excerpt，为空时按「excerpt 回退」条款从正文推导）
+  - 所有文本 XML 转义（`& < > " '`）
+- `GET /api/sitemap.xml` → urlset（xmlns `http://www.sitemaps.org/schemas/sitemap/0.9`），
+  Content-Type `application/xml; charset=utf-8`
+  - 含：首页 `{base}/`、全部 published 文章详情页（lastmod=updated_at，W3C datetime 即 RFC3339）、
+    标签索引 `{base}/tags`、分类索引 `{base}/categories`、归档 `{base}/archive`
 
 ## 鉴权
 - `POST /api/auth/login` body `{username, password}` → 200 `AuthResult`；错误 → 401 `invalid_credentials`
@@ -74,6 +95,17 @@ AuthResult   = {token, username, expires_at}
 - `GET /api/admin/comments?status=<approved|hidden|all>&post_id=&page&per_page` → 分页 `[CommentAdmin]`，created_at DESC
 - `PUT /api/admin/comments/:id` body `{status}` → `CommentAdmin`
 - `DELETE /api/admin/comments/:id` → 204
+
+图片上传（2026-10-03 新增）：
+- `POST /api/admin/uploads`（multipart/form-data，字段名 `file`）→ 200 `UploadResult`
+  - 允许类型：png、jpeg、gif、webp；**按文件头 magic bytes 判定真实类型**，不信任扩展名与
+    Content-Type；svg 一律拒绝（XSS 风险）。类型不符 → 422 `invalid_file_type`
+  - 大小上限 config.toml `[uploads] max_size_mb`（默认 10MB），超出 → 422 `file_too_large`
+  - 存储：后端运行目录 `uploads/<yyyy>/<mm>/<sha256 前 16 位 hex>.<规范扩展名>`（扩展名由
+    判定出的真实类型决定：png/jpg/gif/webp）；文件名不含用户输入，天然防穿越；不入数据库
+  - **内容哈希去重**：同 sha256 的文件已存在（任意年月目录）则直接返回已有 url，不重复落盘
+  - `filename` 仅回显原始文件名（JSON 转义），未提供时回退生成的文件名
+  - 请求体上限 = `max_size_mb` + 1MB multipart 开销余量（超出上限的文件仍报 422 `file_too_large`）
 
 ## CORS
 - 后端允许来源：`http://localhost:5173`（可在 config.toml `[cors] allowed_origins` 配置，默认含此项）；允许方法 GET/POST/PUT/DELETE/OPTIONS，允许头 Authorization/Content-Type

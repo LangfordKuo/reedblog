@@ -20,6 +20,34 @@ pub struct Config {
     pub plugins: PluginsConfig,
     #[serde(default)]
     pub themes: ThemesConfig,
+    #[serde(default)]
+    pub uploads: UploadsConfig,
+}
+
+/// [uploads]：图片上传存储根目录（相对后端运行目录或绝对路径）+ 单文件大小上限（MB）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UploadsConfig {
+    #[serde(default = "default_uploads_dir")]
+    pub dir: String,
+    #[serde(default = "default_max_size_mb")]
+    pub max_size_mb: u64,
+}
+
+impl Default for UploadsConfig {
+    fn default() -> Self {
+        Self {
+            dir: default_uploads_dir(),
+            max_size_mb: default_max_size_mb(),
+        }
+    }
+}
+
+pub fn default_uploads_dir() -> String {
+    "uploads".to_string()
+}
+
+pub fn default_max_size_mb() -> u64 {
+    10
 }
 
 /// [plugins]：插件存储根目录（相对后端运行目录或绝对路径）
@@ -73,6 +101,10 @@ pub struct ServerConfig {
     pub host: String,
     #[serde(default = "default_port")]
     pub port: u16,
+    /// 站点绝对 URL（如 https://blog.example.com），供 feed.xml / sitemap.xml 生成链接；
+    /// 为空则从请求头（X-Forwarded-Proto/Host、Host）推导
+    #[serde(default)]
+    pub base_url: String,
 }
 
 impl Default for ServerConfig {
@@ -80,6 +112,7 @@ impl Default for ServerConfig {
         Self {
             host: default_host(),
             port: default_port(),
+            base_url: String::new(),
         }
     }
 }
@@ -257,6 +290,7 @@ mod tests {
             cors: CorsConfig::default(),
             plugins: PluginsConfig::default(),
             themes: ThemesConfig::default(),
+            uploads: UploadsConfig::default(),
         }
     }
 

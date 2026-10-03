@@ -22,13 +22,16 @@ use tower_http::cors::CorsLayer;
 use config::Config;
 use error::ApiError;
 use handlers::{
-    admin_comments, admin_plugins, admin_posts, admin_terms, admin_themes, frontend, install,
-    public, site_auth,
+    admin_comments, admin_plugins, admin_posts, admin_terms, admin_themes, feed, frontend, install,
+    public, site_auth, uploads,
 };
 use state::{connect_pool, AppState};
 
 /// 插件/主题 zip 上传的请求体上限
 const UPLOAD_LIMIT: usize = 32 * 1024 * 1024;
+
+/// 图片上传请求体上限的 multipart 开销余量（配置的文件上限之上再加 1MB）
+const UPLOADS_OVERHEAD_SLACK: usize = 1024 * 1024;
 
 /// /api/* 未匹配路径的兜底：未安装 → 503 not_installed；已安装 → 404 JSON
 async fn api_fallback(State(state): State<AppState>, _req: Request) -> Response {
@@ -55,6 +58,11 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
             Method::OPTIONS,
         ])
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
+
+    // 图片上传的请求体上限（构建时读一次 [uploads] max_size_mb；运行期 handler 内还会按最新配置逐块校验）
+    let uploads_body_limit = state
+        .uploads_max_size_bytes()
+        .saturating_add(UPLOADS_OVERHEAD_SLACK);
 
     let api = Router::new()
         // 安装向导（未安装时也可用）
@@ -112,6 +120,18 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
             axum::routing::put(admin_comments::admin_update_comment)
                 .delete(admin_comments::admin_delete_comment),
         )
+        // 管理：图片上传（请求体上限 = 配置文件大小上限 + multipart 开销余量；
+        // 超限文件由 handler 逐块计数报 422 file_too_large）
+        .route(
+            "/admin/uploads",
+            post(uploads::admin_upload_image)
+                .layer(DefaultBodyLimit::max(uploads_body_limit)),
+        )
+        // 上传文件公开读取（已安装后无需鉴权；不进未安装门禁白名单）
+        .route("/uploads/{*path}", get(uploads::serve_upload))
+        // RSS feed 与 sitemap（已安装后公开）
+        .route("/feed.xml", get(feed::feed_xml))
+        .route("/sitemap.xml", get(feed::sitemap_xml))
         // 前端注入与主题（公开，未安装门禁白名单）
         .route("/frontend/injections", get(frontend::frontend_injections))
         .route("/themes/active", get(frontend::themes_active))

@@ -104,6 +104,14 @@ pub struct ArchiveEntry {
     pub count: i64,
 }
 
+/// POST /api/admin/uploads 响应（契约 UploadResult）；filename 仅回显原始文件名
+#[derive(Debug, Clone, Serialize)]
+pub struct UploadResult {
+    pub url: String,
+    pub size: u64,
+    pub filename: String,
+}
+
 /// 分页响应统一形状
 #[derive(Debug, Clone, Serialize)]
 pub struct Page<T: Serialize> {

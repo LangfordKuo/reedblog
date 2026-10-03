@@ -27,6 +27,7 @@ urlencoding = "2"
 rhai = { version = "1", features = ["sync"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+sha2 = "0.10"
 
 [dev-dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart"] }

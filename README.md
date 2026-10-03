@@ -13,6 +13,8 @@ A lightweight blog system written in Rust, with plugin & theme extensibility.
 - 文章管理：Markdown 写作（GFM 表格、删除线、任务列表）、草稿/发布两态、slug 自定义或自动生成、摘要缺省时自动从正文提取（纯文本，≤200 字符）
 - 分类、标签、按月归档；文章列表分页
 - 评论：先发后审（创建即公开），后台可隐藏/恢复/删除
+- 图片上传：编辑器工具栏 / 粘贴 / 拖拽即传（PNG/JPEG/GIF/WebP，按 magic bytes 判定真实类型，SVG 拒绝，上限默认 10MB 可配），sha256 内容哈希去重，经 `/api/uploads/*` 静态托管（immutable 强缓存）
+- RSS 订阅（`/api/feed.xml`，最新 20 篇）与 sitemap（`/api/sitemap.xml`）；站点绝对 URL 支持 `[server] base_url` 配置，为空时按反代头（X-Forwarded-Proto/Host）推导
 - 前台：文章代码高亮（highlight.js）、响应式布局
 - 后台管理面板：仪表盘、文章、分类、标签、评论、插件、主题
 
@@ -144,7 +146,7 @@ reedblog/
 │   │   ├── auth.rs / error.rs / middleware.rs / models.rs
 │   │   └── main.rs / lib.rs  # 入口与路由组装
 │   ├── migrations/           # sqlx 迁移（sqlite/ 与 mysql/ 各一份）
-│   └── tests/                # 集成测试（integration、extensibility）
+│   └── tests/                # 集成测试（integration、extensibility、uploads_feed）
 ├── frontend/                 # React 前端（Vite + Tailwind CSS 4）
 │   └── src/
 │       ├── pages/            # 公开页面、/install 安装向导、/admin 后台

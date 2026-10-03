@@ -20,6 +20,7 @@ import type {
   SiteInfo,
   Tag,
   ThemeInfo,
+  UploadResult,
 } from "./types"
 
 export class ApiError extends Error {
@@ -186,6 +187,13 @@ export const api = {
     updateComment: (id: number, status: CommentStatus) =>
       request<CommentAdmin>("PUT", `/admin/comments/${id}`, { status }),
     deleteComment: (id: number) => request<void>("DELETE", `/admin/comments/${id}`),
+
+    // 图片上传（multipart 字段 file；仅 png/jpeg/gif/webp，服务端按 magic bytes 判定）
+    uploadImage: (file: File) => {
+      const form = new FormData()
+      form.append("file", file)
+      return requestForm<UploadResult>("POST", "/admin/uploads", form)
+    },
 
     // 插件管理（multipart 上传 zip，字段名 file）
     plugins: () => request<Items<PluginInfo>>("GET", "/admin/plugins"),

@@ -18,7 +18,7 @@ use std::time::Duration;
 use crate::auth::{generate_jwt_secret, hash_password};
 use crate::config::{
     AuthConfig, Config, CorsConfig, DatabaseConfig, MysqlConfig, PluginsConfig, ServerConfig,
-    SiteConfig, ThemesConfig,
+    SiteConfig, ThemesConfig, UploadsConfig,
 };
 use crate::error::{ApiError, ApiResult, ValidJson};
 use crate::models::InstallRequest;
@@ -93,6 +93,7 @@ pub async fn install(
         cors: CorsConfig::default(),
         plugins: PluginsConfig::default(),
         themes: ThemesConfig::default(),
+        uploads: UploadsConfig::default(),
     });
     cfg.database.db_type = req.db_type.clone();
     if req.db_type == "sqlite" {

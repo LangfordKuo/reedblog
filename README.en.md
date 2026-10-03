@@ -12,6 +12,8 @@ A lightweight blog system written in Rust, with plugin & theme extensibility.
 - Post management: Markdown editing (GFM tables, strikethrough, task lists), draft/published states, custom or auto-generated slugs, automatic plain-text excerpts (≤200 chars) when omitted
 - Categories, tags, monthly archives; paginated post lists
 - Comments: publish-first (visible immediately), with hide/restore/delete moderation in the admin panel
+- Image uploads: toolbar button, paste, or drag-and-drop in the editor (PNG/JPEG/GIF/WebP, real type detected via magic bytes, SVG rejected, 10MB default limit, configurable), sha256 content-hash deduplication, served via `/api/uploads/*` with immutable caching
+- RSS feed (`/api/feed.xml`, latest 20 posts) and sitemap (`/api/sitemap.xml`); absolute site URL from `[server] base_url` when set, otherwise derived from reverse-proxy headers (X-Forwarded-Proto/Host)
 - Frontend: code highlighting (highlight.js), responsive layout
 - Admin panel: dashboard, posts, categories, tags, comments, plugins, themes
 
@@ -145,7 +147,7 @@ reedblog/
 │   │   ├── auth.rs / error.rs / middleware.rs / models.rs
 │   │   └── main.rs / lib.rs  # Entrypoint and router assembly
 │   ├── migrations/           # sqlx migrations (sqlite/ and mysql/)
-│   └── tests/                # Integration tests (integration, extensibility)
+│   └── tests/                # Integration tests (integration, extensibility, uploads_feed)
 ├── frontend/                 # React frontend (Vite + Tailwind CSS 4)
 │   └── src/
 │       ├── pages/            # Public pages, /install wizard, /admin panel
