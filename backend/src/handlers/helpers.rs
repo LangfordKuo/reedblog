@@ -59,26 +59,77 @@ pub fn temp_slug() -> String {
 /// excerpt 缺省时由正文生成纯文本摘要（契约「excerpt 为空时的回退」条款）：
 /// 剥离 Markdown 语法（标题#、强调符、代码围栏及语言标记、行内代码反引号、
 /// 表格分隔线与竖线、链接保留文字、图片语法、引用>、列表符号），
-/// 代码块内容整体丢弃，多个空白折叠为单个空格，截断至 ≤200 字符（按 char，CJK 安全；
-/// 截断时末位补省略号，总长仍 ≤200）。
+/// 代码块与数学公式源码整体丢弃，多个空白折叠为单个空格，截断至 ≤200 字符
+/// （按 char，CJK 安全；截断时末位补省略号，总长仍 ≤200）。
 pub fn derive_excerpt(content_md: &str) -> String {
     truncate_chars(&md_to_plain_text(content_md), 200)
 }
 
+/// 代码围栏行（``` 及语言标记）判定：开/闭行本身不进摘要内容
+fn is_code_fence(trimmed: &str) -> bool {
+    trimmed.starts_with("```")
+}
+
+/// 块级公式行标记：`$$…$$` 单行或成对多行整段丢弃；未闭合的 `$$` 不构成公式
+/// （与前端渲染约定一致：未闭合时保持原文），按普通行继续处理。
+/// 代码围栏内的 `$$` 不参与（与「代码块内容丢弃」既有策略一致）。
+fn block_math_lines(lines: &[&str]) -> Vec<bool> {
+    let mut mask = vec![false; lines.len()];
+    let mut in_code = false;
+    let mut i = 0;
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+        if is_code_fence(trimmed) {
+            in_code = !in_code;
+            i += 1;
+            continue;
+        }
+        if in_code || !trimmed.starts_with("$$") {
+            i += 1;
+            continue;
+        }
+        // 单行 `$$…$$`：本行即完整公式
+        if trimmed.len() > 2 && trimmed.ends_with("$$") {
+            mask[i] = true;
+            i += 1;
+            continue;
+        }
+        // 跨行：向后找以 `$$` 结尾的闭合行，成对则整段丢弃；找不到则视为未闭合
+        match (i + 1..lines.len()).find(|&j| lines[j].trim().ends_with("$$")) {
+            Some(close) => {
+                for flag in &mut mask[i..=close] {
+                    *flag = true;
+                }
+                i = close + 1;
+            }
+            None => i += 1,
+        }
+    }
+    mask
+}
+
 /// Markdown → 纯文本（不截断）：derive_excerpt 与搜索 snippet 共用的同一条剥离逻辑
 /// （契约「全文搜索」条款要求 snippet 用 derive_excerpt 同款规则，勿复制实现）。
+/// 数学公式源码（行内 `$…$` / 块级 `$$…$$`）与代码块同样整体丢弃，
+/// 保证摘要与搜索 snippet 不出现 `\frac{...}` 这类 LaTeX 源码。
 pub fn md_to_plain_text(content_md: &str) -> String {
+    let lines: Vec<&str> = content_md.lines().collect();
+    let math_lines = block_math_lines(&lines);
     let mut kept: Vec<String> = Vec::new();
     let mut in_code_block = false;
-    for line in content_md.lines() {
+    for (idx, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
         // 代码围栏开/闭行（``` 及语言标记）本身不进摘要
-        if trimmed.starts_with("```") {
+        if is_code_fence(trimmed) {
             in_code_block = !in_code_block;
             continue;
         }
         // 代码块内容直接丢弃，不拼进摘要
         if in_code_block || trimmed.is_empty() {
+            continue;
+        }
+        // 块级公式整行丢弃（含成对多行与单行 `$$…$$`）
+        if math_lines[idx] {
             continue;
         }
         // 表格分隔线（|---|:--:|）与水平分割线（--- /*** / ___ / ===）整行丢弃
@@ -185,6 +236,8 @@ fn clean_line(line: &str) -> String {
     let s = strip_list_marker(s);
     // 历史数据存在整篇被压成单行的情况，``` 围栏不再独占一行：行内成对剔除
     let s = strip_inline_fences(s);
+    // 行内公式 `$…$` 整段移除（代码段与货币符号不受影响）；块级公式已按行丢弃
+    let s = strip_inline_math(&s);
     let s = strip_link_syntax(&s);
     let cleaned = strip_inline_marks(&s);
     cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -203,6 +256,147 @@ fn strip_inline_fences(s: &str) -> String {
         };
     }
     out.push_str(rest);
+    out
+}
+
+// ---------- 数学公式剥离（与前端 `@/lib/math` 的渲染约定对齐） ----------
+
+/// 下标字符是否被反斜杠转义（数前面连续反斜杠的奇偶）
+fn is_escaped_chars(chars: &[char], index: usize) -> bool {
+    let mut backslashes = 0;
+    let mut i = index;
+    while i > 0 && chars[i - 1] == '\\' {
+        backslashes += 1;
+        i -= 1;
+    }
+    backslashes % 2 == 1
+}
+
+/// 自 start 起连续 `$` 的个数（`$` 与 `$$` 均按一个标记整体处理）
+fn dollar_run(chars: &[char], start: usize) -> usize {
+    let mut n = 0;
+    while start + n < chars.len() && chars[start + n] == '$' {
+        n += 1;
+    }
+    n
+}
+
+/// `$` 后紧跟半角数字时，判定它是货币写法还是公式开标记（与前端同款规则）：
+/// 数字（可含千分位逗号/小数点）之后为行尾或非公式字符（中文、全角标点等）→ 货币；
+/// 为 ASCII 字母数字或运算/命令字符 → 公式（`$2\pi r$`、`$2 + 2 = 4$`）。
+fn is_currency_dollar(chars: &[char], index: usize) -> bool {
+    let mut j = index + 1;
+    while j < chars.len() && (chars[j].is_ascii_digit() || chars[j] == ',' || chars[j] == '.') {
+        j += 1;
+    }
+    while j < chars.len() && chars[j].is_whitespace() {
+        j += 1;
+    }
+    let Some(&c) = chars.get(j) else {
+        return true;
+    };
+    !(c.is_ascii_alphanumeric()
+        || matches!(
+            c,
+            '\\' | '^'
+                | '_'
+                | '='
+                | '+'
+                | '-'
+                | '*'
+                | '/'
+                | '('
+                | ')'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | '|'
+                | '<'
+                | '>'
+                | '%'
+                | '!'
+                | '$'
+        ))
+}
+
+/// 自 from 起找行内公式闭标记（`$` run 的起点）；货币写法（后随数字）不作闭标记
+fn find_math_close(chars: &[char], from: usize) -> Option<usize> {
+    let mut j = from;
+    while j < chars.len() {
+        if chars[j] == '$' && !is_escaped_chars(chars, j) {
+            let run = dollar_run(chars, j);
+            let after_digit = chars
+                .get(j + run)
+                .map_or(false, |c| c.is_ascii_digit());
+            if !(after_digit && is_currency_dollar(chars, j)) {
+                return Some(j);
+            }
+            j += run;
+            continue;
+        }
+        j += 1;
+    }
+    None
+}
+
+/// 移除行内公式 `$…$` / `$$…$$`（成对、非货币写法），内容整段删除不留残余空白
+/// （多空格由调用方折叠）；未闭合、货币（`$5 到 $10`）与代码区（反引号段）内的
+/// `$` 一律原样保留。
+fn strip_inline_math(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < chars.len() {
+        // 行内代码 `…`（同长度反引号配对）：整段原样输出，代码里的 $ 不是公式
+        if chars[i] == '`' {
+            let mut run = 0;
+            while i + run < chars.len() && chars[i + run] == '`' {
+                run += 1;
+            }
+            let mut j = i + run;
+            let mut close = None;
+            while j < chars.len() {
+                if chars[j] == '`' {
+                    let mut n = 0;
+                    while j + n < chars.len() && chars[j + n] == '`' {
+                        n += 1;
+                    }
+                    if n == run {
+                        close = Some(j);
+                        break;
+                    }
+                    j += n;
+                    continue;
+                }
+                j += 1;
+            }
+            if let Some(close) = close {
+                out.extend(&chars[i..close + run]);
+                i = close + run;
+                continue;
+            }
+        }
+        if chars[i] == '$' && !is_escaped_chars(&chars, i) {
+            let run = dollar_run(&chars, i);
+            let after = i + run;
+            let openable = chars
+                .get(after)
+                .map_or(false, |c| !c.is_whitespace());
+            let currency = chars
+                .get(after)
+                .map_or(false, |c| c.is_ascii_digit())
+                && is_currency_dollar(&chars, i);
+            if openable && !currency {
+                if let Some(close) = find_math_close(&chars, after) {
+                    i = close + dollar_run(&chars, close);
+                    continue;
+                }
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
     out
 }
 
@@ -910,6 +1104,66 @@ mod tests {
         for sym in ['#', '*', '`'] {
             assert!(!s.contains(sym), "snippet 不应包含 {sym}：{s}");
         }
+    }
+
+    // ---------- 数学公式剥离（KaTeX 渲染约定的纯文本侧） ----------
+
+    #[test]
+    fn inline_math_stripped_without_extra_spaces() {
+        assert_eq!(derive_excerpt("质能方程 $E = mc^2$ 很简洁"), "质能方程 很简洁");
+        assert_eq!(md_to_plain_text("前 $x$ 后"), "前 后");
+        // 数字开头的公式同样是公式（货币防误判不误伤）
+        assert_eq!(derive_excerpt("面积 $2\\pi r$ 成立"), "面积 成立");
+        // LaTeX 源码不得残留
+        assert!(!derive_excerpt("公式 $\\frac{a}{b}$ 结束").contains("frac"));
+        // 单双美元混写：行内 `$$…$$` 同样整段移除
+        assert_eq!(md_to_plain_text("公式 $$x$$ 结束"), "公式 结束");
+    }
+
+    #[test]
+    fn block_math_stripped_whole_line() {
+        let md = "前文\n\n$$\n\\frac{a}{b}\n$$\n\n后文";
+        assert_eq!(derive_excerpt(md), "前文 后文");
+        assert_eq!(derive_excerpt("前文\n\n$$E=mc^2$$\n\n后文"), "前文 后文");
+        assert!(!md_to_plain_text(md).contains("frac"));
+    }
+
+    #[test]
+    fn unclosed_and_currency_dollars_kept() {
+        // 未闭合 `$` 原样保留
+        assert_eq!(md_to_plain_text("未闭合 $x + 1 结束"), "未闭合 $x + 1 结束");
+        // 未闭合块级 `$$` 不吞后续内容（与前端渲染「保持原文」一致）
+        let out = md_to_plain_text("前段\n\n$$\n未闭合内容");
+        assert!(out.contains("前段"), "{out}");
+        assert!(out.contains("未闭合内容"), "{out}");
+        // 货币写法不被当公式（含千分位与无空格的相邻价格）
+        assert_eq!(md_to_plain_text("价格 $5 到 $10 元"), "价格 $5 到 $10 元");
+        assert_eq!(md_to_plain_text("售价 $1,000 美元"), "售价 $1,000 美元");
+        assert_eq!(md_to_plain_text("价格 $5到$10元"), "价格 $5到$10元");
+    }
+
+    #[test]
+    fn math_inside_code_untouched() {
+        // 代码块内容整体丢弃（既有「代码块内容丢弃」策略，公式源码一并不进摘要）
+        assert_eq!(derive_excerpt("```\n$a+b$\n```"), "");
+        // 行内代码内容保留，其中的 `$` 不参与公式剥离
+        assert_eq!(
+            md_to_plain_text("命令 `$HOME` 与 `$PATH`"),
+            "命令 $HOME 与 $PATH"
+        );
+    }
+
+    #[test]
+    fn snippet_free_of_latex_source() {
+        // 搜索 snippet 与 excerpt 同源：含公式文章不得出现 LaTeX 源码
+        let md = "# 推导\n\n由 $E = mc^2$ 可得，块级如下：\n\n$$\n\\int_0^1 x^2 dx\n$$\n\n结论见上文";
+        let plain = md_to_plain_text(md);
+        let s = make_snippet(&plain, &["结论".to_string()], "回退");
+        assert!(s.contains("结论"), "{s}");
+        for src in ["\\", "int_0", "^2", "frac", "E = mc", "dx"] {
+            assert!(!s.contains(src), "snippet 不应含公式源码 {src}：{s}");
+        }
+        assert!(derive_excerpt(md).contains("推导"), "{}", derive_excerpt(md));
     }
 
     #[test]

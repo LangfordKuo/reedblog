@@ -55,6 +55,10 @@ inject = ["head", "body_end"]
 | `post.after_publish` | `post_after_publish(ctx)` | `ctx.title`, `ctx.slug`, `ctx.published_at` | 返回值忽略（通知类钩子，如触发外部 webhook 由插件自行实现受限能力——第一版无网络能力，仅用于日志/内部状态） |
 
 - 多个启用的插件实现同一钩子：按插件 slug 字典序**依次串行**调用，前一个的输出 map 作为下一个的输入（链式）。
+- 渲染管线与公式（2026-10-04 补）：文章正文（`GET /api/posts/:slug` 的 `content_md`，含 `post.before_render`
+  改写后的结果）由**前端**渲染，其中 `$…$` 行内 / `$$…$$` 块级数学公式由前端 KaTeX 渲染
+  （api-contract.md「文章公式渲染」）。插件改写 content_md 不影响公式渲染能力，也无需感知公式语法；
+  `post.after_render` 的 content_html 供页面（page）详情注入，与公式渲染链路互不影响。
 - `comment.before_create` 链式时，任一插件返回 `block` 立即短路拦截。
 - `comment.before_create` 对**回复（楼中楼）同样生效**（2026-10-03 嵌套评论新增，见 api-contract.md「评论回复」）：
   - `ctx.parent_id` / `ctx.reply_to_id` 为 INT，**0 表示无**；值是父评论校验与两级归一化

@@ -101,12 +101,18 @@ post_count、站点统计 SiteStats.post_count、归档计数）同口径。详�
     comment_count 为既有 SELECT 别名，SQLite/MySQL 均支持按别名排序；
     **不受置顶影响**）；其他值 → 422 `validation_error`
 - excerpt 为空时的回退（2026-10-03 定）：由 content_md 生成**纯文本**摘要（剥离 Markdown 语法：标题#、强调符、代码围栏、表格线、链接保留文字），截断至 ≤200 字符；不得返回含 Markdown 符号的原文
+  - 数学公式（2026-10-04 补）：`$…$` 行内公式整段移除（不留多余空格）、`$$…$$` 块级公式整行移除，与代码块内容同为「丢弃」策略；摘要不得出现 `\frac{...}` 这类 LaTeX 源码。货币写法（`价格 $5 到 $10`）与未闭合 `$` 原样保留
 - `GET /api/posts/:slug` → `PostDetail`；不存在/未公开可见（草稿、未到点的 scheduled）→ 404 `not_found`
   - **上一篇/下一篇**（2026-10-04 新增，见「文章上一篇/下一篇」）：`prev_post`/`next_post` 为
     `{title, slug}|null`；prev = 发布时间更早的相邻文章、next = 更晚，纯时间序、**不受置顶影响**；
     草稿与未到点的 scheduled 不作为相邻项出现
   - **浏览量计数点**：每次公开命中 view_count + 1（去重/排除规则见「浏览量与点赞」）；
     计数成功时响应中的 view_count 已含本次
+  - **文章公式渲染**（2026-10-04 定，**无接口变更**）：content_md 中的 `$…$`（行内）与
+    `$$…$$`（块级，含独占一行的 `$$E=mc^2$$`）数学公式由**前端**用 KaTeX 渲染并随前端构建
+    产物分发（CSS/字体在 dist，不走主题包 assets）；字段形状与语义不变，后端不做公式 HTML 转换
+    （pulldown-cmark 选项未动）。代码块/行内代码内的 `$`、货币写法（`$5 到 $10`）与未闭合 `$`
+    保持原文。页面（page）详情的 content_html 仍为后端 pulldown-cmark 产物，不含公式渲染
 - `GET /api/posts/:slug/like?liker_key=` → 200 `{likes: int, liked: bool}`（当前访客是否已赞，
   前端进详情页时调用决定按钮初始状态；见「浏览量与点赞」）
 - `POST /api/posts/:slug/like` → 200 `{likes: <新总数>, liked: true}`，body `{liker_key}`（见「浏览量与点赞」）
@@ -138,6 +144,8 @@ post_count、站点统计 SiteStats.post_count、归档计数）同口径。详�
     markup），定位**任一词条的首个命中位置**（大小写不敏感），截取命中点前 ≤40 字符、后 ≤60 字符
     的窗口（按 char 计，CJK 安全）；窗口两端非文本边界时补 `…`；纯文本中找不到命中
     （仅 title/excerpt 命中）则回退为响应中的 excerpt。命中高亮由前端自行实现
+  - 公式同样被剥离（2026-10-04 补）：snippet 与 excerpt 同源（`md_to_plain_text`），
+    行内/块级公式源码不进入纯文本，搜索结果片段不得出现 LaTeX 源码
 
 上传文件读取（2026-10-03 新增）：
 - `GET /api/uploads/*path` → 已上传图片的静态读取（公开、无需鉴权；不在未安装门禁白名单内，未安装时同样 503）

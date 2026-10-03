@@ -74,6 +74,18 @@ export function slugifyHeadingText(text: string): string {
 }
 
 /**
+ * 标题纯文本：KaTeX 会同时输出视觉隐藏的 MathML 副本（`.katex-mathml`，含
+ * `annotation` 里的 LaTeX 源码），直接取 textContent 会把源码与可见排版重复
+ * 混进 TOC；有公式时按副本移除后再取文本，普通标题零开销。
+ */
+function headingText(el: HTMLElement): string {
+  if (!el.querySelector(".katex-mathml")) return (el.textContent ?? "").trim()
+  const clone = el.cloneNode(true) as HTMLElement
+  clone.querySelectorAll(".katex-mathml").forEach((n) => n.remove())
+  return (clone.textContent ?? "").trim()
+}
+
+/**
  * 从正文容器提取 h2..h{maxLevel} 标题（文档顺序）：
  * - 元素已有 id 直接沿用；无 id 时按 slugifyHeadingText 生成，
  *   与本次已收集的 id 及页面现存元素 id 冲突时追加 -1/-2… 后缀，写回 el.id；
@@ -89,7 +101,7 @@ export function extractTocHeadings(
   const used = new Set<string>()
   const out: TocHeading[] = []
   for (const el of Array.from(root.querySelectorAll<HTMLElement>(selector))) {
-    const text = (el.textContent ?? "").trim()
+    const text = headingText(el)
     if (!text) continue
     let id = el.id
     if (id) {

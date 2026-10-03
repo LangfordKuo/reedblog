@@ -121,6 +121,27 @@
   }
 }
 
+/* 暗色模式：prose 正文颜色改用主题 token。Tailwind typography 给 prose-neutral
+   固定了深色文字（不随 .dark 反转），与暗色背景对比过低；KaTeX 公式继承
+   currentColor，同样依赖这里。代码块保持既有「浅底深字」（见下方 .prose pre
+   规则，暗色主题包可自行覆盖），故不覆盖 --tw-prose-pre-* 变量。 */
+.dark .prose {
+  --tw-prose-body: var(--foreground);
+  --tw-prose-headings: var(--foreground);
+  --tw-prose-lead: var(--muted-foreground);
+  --tw-prose-links: var(--foreground);
+  --tw-prose-bold: var(--foreground);
+  --tw-prose-counters: var(--muted-foreground);
+  --tw-prose-bullets: var(--muted-foreground);
+  --tw-prose-hr: var(--border);
+  --tw-prose-quotes: var(--muted-foreground);
+  --tw-prose-quote-borders: var(--border);
+  --tw-prose-captions: var(--muted-foreground);
+  --tw-prose-code: var(--foreground);
+  --tw-prose-th-borders: var(--border);
+  --tw-prose-td-borders: var(--border);
+}
+
 /* Markdown 渲染中的代码高亮（highlight.js github 亮色主题微调） */
 .prose :where(pre):not(:where([class~="not-prose"] *)) {
   background-color: oklch(0.985 0 0);
