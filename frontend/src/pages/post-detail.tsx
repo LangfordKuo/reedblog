@@ -8,6 +8,7 @@ import { Markdown } from "@/components/markdown"
 import { PostNav } from "@/components/post-nav"
 import { PostToc } from "@/components/post-toc"
 import { ReadingProgress } from "@/components/reading-progress"
+import { RelatedPosts } from "@/components/related-posts"
 import { BlockSpinner } from "@/components/spinner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -158,6 +159,9 @@ export default function PostDetailPage() {
         </article>
         {/* 上一篇/下一篇（契约「文章上一篇/下一篇」条款；评论区之前，左=更早、右=更晚） */}
         <PostNav prev={post.prev_post} next={post.next_post} />
+        {/* 相关文章（契约「相关文章推荐」条款；PostNav 之后、评论区之前；
+            失败/为空/加载中整块不渲染，见组件内注释） */}
+        <RelatedPosts slug={post.slug} />
         <Separator className="my-10" />
         <CommentSection slug={post.slug} />
       </div>

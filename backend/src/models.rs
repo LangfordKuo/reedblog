@@ -514,6 +514,15 @@ pub struct SearchQuery {
     pub per_page: Option<i64>,
 }
 
+/// GET /api/posts/:slug/related 查询参数（契约「相关文章推荐」条款）：
+/// limit 用字符串接收后手动校验——声明为 Option<i64> 时非数字会被 axum Query
+/// 拒绝成 400 纯文本，不符合契约「非数字 → 422 validation_error」的要求
+#[derive(Debug, Clone, Deserialize)]
+pub struct RelatedQuery {
+    #[serde(default)]
+    pub limit: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct AdminPostsQuery {
     #[serde(default)]

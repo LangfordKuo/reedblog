@@ -172,6 +172,10 @@ export const api = {
   siteStats: () => request<SiteStats>("GET", "/site/stats"),
   posts: (q: PostQuery = {}) => request<Page<PostPublic>>("GET", `/posts${qs(q)}`),
   post: (slug: string) => request<PostDetail>("GET", `/posts/${encodeURIComponent(slug)}`),
+  // 相关文章推荐（契约「相关文章推荐」条款）：非分页裸数组；无共享标签/分类时为空数组，
+  // 前端据此整块不渲染；limit 缺省由后端取 5
+  related: (slug: string, limit?: number) =>
+    request<PostPublic[]>("GET", `/posts/${encodeURIComponent(slug)}/related${qs({ limit })}`),
   comments: (slug: string) =>
     request<CommentPub[]>("GET", `/posts/${encodeURIComponent(slug)}/comments`),
   // 点赞三接口（契约「浏览量与点赞」条款；liker_key 为 localStorage 匿名 id，

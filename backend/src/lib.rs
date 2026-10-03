@@ -98,6 +98,8 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
                 .post(public::like_post)
                 .delete(public::unlike_post),
         )
+        // 相关文章推荐（公开；不进未安装门禁白名单，未安装 503——契约「相关文章推荐」条款）
+        .route("/posts/{slug}/related", get(public::list_related_posts))
         .route("/tags", get(public::list_tags))
         .route("/categories", get(public::list_categories))
         .route("/archive", get(public::archive))

@@ -111,6 +111,8 @@ post_count、站点统计 SiteStats.post_count、归档计数）同口径。详�
   前端进详情页时调用决定按钮初始状态；见「浏览量与点赞」）
 - `POST /api/posts/:slug/like` → 200 `{likes: <新总数>, liked: true}`，body `{liker_key}`（见「浏览量与点赞」）
 - `DELETE /api/posts/:slug/like` → 200 `{likes, liked: false}`，liker_key 走 query 或 JSON body（见「浏览量与点赞」）
+- `GET /api/posts/:slug/related?limit=5` → **非分页** `[PostPublic]`（相关文章推荐，见「相关文章推荐」；
+  无共享标签/分类时为空数组；文章不存在/未公开可见 → 404 `not_found`）
 - `GET /api/posts/:slug/comments` → `[CommentPub]`（仅 approved 且线程可见，按时间 ASC, id ASC；
   仍为平铺数组，两级树由前端按 parent_id 自行组装，见「评论回复」）
   - 评论目标可见性同文章：文章未公开可见（含未到点的 scheduled）→ 404 `not_found`
@@ -481,6 +483,33 @@ docs/extensibility-contract.md「主题组件」与 docs/theme-development.md「
 - 前端渲染约定：详情页正文底部、评论区之前显示「上一篇 / 下一篇」双栏导航
   （左 = 更早、右 = 更晚，显示标题、可点击跳转）；单侧为 `null` 时该侧留空
   （不出现死链接），窄屏（<sm）改为上下堆叠；配色走现有主题 token 与暗色模式
+
+## 相关文章推荐（2026-10-04 新增）
+
+- `GET /api/posts/:slug/related?limit=5` → `[PostPublic]`（**非分页裸数组**，复用现有列表条目
+  形状——前端无需新类型；条目为常规公开字段，列表/搜索的形状与行为完全不变）
+- limit：默认 5，取值 **1–10（含端点）**；越界（0、11、负数）或非数字 → 422 `validation_error`；
+  按十进制整数解析，允许首尾空白（`" 5 "` 合法）
+- 文章不存在或未公开可见（草稿、未到点的 scheduled）→ 404 `not_found`（与详情接口同口径）
+- 打分（候选为除自身外的全部公开可见文章）：
+  `score = 2 × 与当前文章共享的标签数 + (与当前文章同分类 ? 1 : 0)`
+  - 共享标签数：候选文章与当前文章在 `post_tags` 中 tag_id 的交集大小（按 tag 计，重复关联不重复计）
+  - 同分类：仅当双方 `category_id` 均非 NULL 且相等时 +1（**当前文章无分类时不产生分类加分**）
+  - **一篇文章都没有共享标签/分类时 → 返回空数组 `[]`**（不硬塞热门/最新文章回退；
+    前端据此不渲染「相关文章」区块）
+- 排序：`score DESC, view_count DESC, published_at DESC, id DESC`（同分先看浏览量，再看发布时间，
+  最后 id 做稳定 tiebreak）
+- 可见性谓词与所有公开查询完全一致（见「公开可见性」）：草稿、未到点的 scheduled **永不出现**；
+  已到点的 scheduled 正常参与打分与排序
+- 鉴权：公开接口、无需鉴权；**不进未安装门禁白名单**（未安装 → 503 `not_installed`，同其余公开接口）
+- 实现约束：SQLite/MySQL 共用一份 SQL——先由子查询算出 `(post_id, score)`（共享标签用
+  `post_tags` + `IN (…)` 计数、同分类单独 +1，`UNION ALL` 合并后 `SUM`），再 JOIN 回 `posts`
+  取字段；**不 `GROUP BY` 后直选非聚合列**（规避 MySQL `ONLY_FULL_GROUP_BY` 与 SQLite 的行为差异）；
+  禁用 FTS5/MATCH、窗口函数、行值比较等单方言或版本敏感特性；LIMIT 用绑定参数
+- 前端渲染约定：详情页文末、`<PostNav>`（上一篇/下一篇）之后与 `<Separator>` + 评论区之前
+  显示「相关文章」区块（最多 5 条，每条为标题链接 + 发布日期）；单列列表；
+  **拉取失败或结果为空时整块不渲染**（静默降级，不报错不占位）；加载完成前不渲染；
+  配色走现有主题 token，暗色模式正常，窄屏不溢出
 
 ## 鉴权
 - `POST /api/auth/login` body `{username, password}` → 200 `AuthResult`；错误 → 401 `invalid_credentials`

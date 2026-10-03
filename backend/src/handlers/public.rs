@@ -12,7 +12,7 @@ use crate::error::{ApiError, ApiResult, ValidJson};
 use crate::models::{
     normalize_paging, ArchiveEntry, Category, CategoryRef, CommentPub, CreateCommentRequest,
     LikeBody, LikeQuery, LikeResult, Page, PostDetail, PostNeighbor, PostPublic, PostsQuery,
-    SearchQuery, SearchResult, Tag,
+    RelatedQuery, SearchQuery, SearchResult, Tag,
 };
 use crate::pages::row_bool;
 use crate::state::{now_rfc3339, require_pool, AppState};
@@ -375,6 +375,90 @@ pub async fn get_post(
         prev_post,
         next_post,
     }))
+}
+
+// ---------- 相关文章（契约「相关文章推荐」条款，2026-10-04 新增） ----------
+
+/// 相关文章 limit 校验：缺省 5，范围 1–10；非数字/越界 → 422 validation_error。
+/// 用字符串接收后手动 parse（见 models::RelatedQuery 注释：Query<i64> 的非数字
+/// 拒绝路径是 400，不符合契约）。允许首尾空白。
+fn parse_related_limit(raw: Option<&str>) -> ApiResult<i64> {
+    let limit = match raw {
+        None => 5,
+        Some(s) => s
+            .trim()
+            .parse::<i64>()
+            .map_err(|_| ApiError::validation(format!("limit '{s}' 非法（须为 1-10 的整数）")))?,
+    };
+    if !(1..=10).contains(&limit) {
+        return Err(ApiError::validation(format!(
+            "limit {limit} 越界（须为 1-10 的整数）"
+        )));
+    }
+    Ok(limit)
+}
+
+/// GET /api/posts/:slug/related?limit=5 → [PostPublic]（非分页裸数组）
+///
+/// 文章不存在/未公开可见（草稿、未到点的 scheduled）→ 404 not_found（与详情同口径）。
+/// 打分：score = 2 × 共享标签数 + (同分类 ? 1 : 0)；候选先由子查询算出 (post_id, score)，
+/// 再 JOIN 回 posts 取字段——GROUP BY 只出现在子查询且只选 pid 与聚合列，规避
+/// MySQL ONLY_FULL_GROUP_BY 与 SQLite 的行为差异。无共享标签/分类的候选不进子查询
+/// → 结果为空数组（不硬塞热门文章）。可见性复用 VISIBLE_POST_SQL（:now 每请求绑定），
+/// 排序 score DESC, view_count DESC, published_at DESC, id DESC。
+pub async fn list_related_posts(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+    Query(q): Query<RelatedQuery>,
+) -> ApiResult<Json<Vec<PostPublic>>> {
+    let (pool, _db_type) = require_pool(&state).await?;
+    let limit = parse_related_limit(q.limit.as_deref())?;
+
+    // 目标文章：不存在/未公开可见 → 404；同时取其 id 与 category_id（可为 NULL）
+    let target_sql =
+        format!("SELECT p.id, p.category_id FROM posts p WHERE p.slug = ? AND {VISIBLE_POST_SQL}");
+    let target = sqlx::query(&target_sql)
+        .bind(&slug)
+        .bind(now_rfc3339())
+        .fetch_optional(&pool)
+        .await?
+        .ok_or_else(ApiError::not_found)?;
+    let target_id: i64 = target.get("id");
+    let target_category: Option<i64> = target.try_get("category_id").unwrap_or(None);
+
+    // 候选打分（子查询 (pid, score)）：左支共享标签每枚 2 分（post_tags 按 tag_id IN 当前文章
+    // 的标签集计数）；右支同分类 1 分（category_id 为 NULL 时比较结果为 NULL，自然不匹配）。
+    // 两支都排除自身；UNION ALL 后按 pid 聚合，共享多标签/标签+同分类的加权自然叠加。
+    let sql = format!(
+        "SELECT {PUBLIC_POST_COLUMNS} FROM posts p \
+         LEFT JOIN categories c ON c.id = p.category_id \
+         JOIN (SELECT u.pid AS pid, SUM(u.pts) AS score FROM ( \
+                 SELECT pt.post_id AS pid, 2 AS pts FROM post_tags pt \
+                 WHERE pt.post_id <> ? AND pt.tag_id IN \
+                   (SELECT src.tag_id FROM post_tags src WHERE src.post_id = ?) \
+                 UNION ALL \
+                 SELECT p2.id AS pid, 1 AS pts FROM posts p2 \
+                 WHERE p2.id <> ? AND p2.category_id IS NOT NULL AND p2.category_id = ? \
+               ) u GROUP BY u.pid) s ON s.pid = p.id \
+         WHERE {VISIBLE_POST_SQL} \
+         ORDER BY s.score DESC, p.view_count DESC, p.published_at DESC, p.id DESC \
+         LIMIT ?"
+    );
+    let rows = sqlx::query(&sql)
+        .bind(target_id)
+        .bind(target_id)
+        .bind(target_id)
+        .bind(target_category)
+        .bind(now_rfc3339())
+        .bind(limit)
+        .fetch_all(&pool)
+        .await?;
+
+    let mut items = Vec::with_capacity(rows.len());
+    for r in &rows {
+        items.push(row_to_post_public(&pool, r).await?);
+    }
+    Ok(Json(items))
 }
 
 /// 找公开可见文章的 id（评论接口共用，即「评论目标可见性」）；
