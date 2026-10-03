@@ -123,6 +123,9 @@ server {
 }
 ```
 
+含 SEO 爬虫分流的完整片段见 [`deploy/nginx.conf.example`](deploy/nginx.conf.example)
+（**本机未安装 Nginx，该片段未实机验证**，上线前请按文件头部注释自测）。
+
 运行后端（工作目录建议固定，`config.toml`、`plugins/`、`themes/`、SQLite 数据库
 文件都相对它解析）：
 
@@ -134,6 +137,33 @@ REEDBLOG_CONFIG=/opt/reedblog/config.toml /usr/local/bin/reedblog-backend
 首次部署通过 `https://blog.example.com/install` 完成安装向导。默认监听
 `127.0.0.1`，适合反代部署；如需直接暴露，改 config.toml `[server] host`。
 生产建议再用 systemd 等进程管理器托管后端。
+
+## SEO / 分享元信息（爬虫分流）
+
+SPA 的运行时 meta 注入微信 / Twitter / Facebook / Slack 等抓取器**看不到**（它们不执行 JS），
+因此采用方案 a：**Nginx 按 UA 分流**（契约「SEO / 分享元信息」条款）。
+
+- **真人流量**：Nginx 照常返回 SPA 静态文件，行为不变；`frontend/src/lib/meta.ts` 在运行时
+  注入 `document.title`、`meta[name=description]`、`og:title/og:description/og:url` 与
+  `link[rel=canonical]`（标签统一带 `data-reedblog-meta="1"` 标注，不与插件 head 注入打架）。
+- **爬虫 / 社媒预览**（`bot|crawler|spider|facebookexternalhit|…|micromessenger|wechat`，大小写不敏感）：
+  `/posts/*`、`/pages/*` 被 proxy 到后端，返回带 OG/Twitter/JSON-LD 的最小 HTML；
+  `/robots.txt` 同样走后端（含 `Sitemap: {base}/api/sitemap.xml` 与后台 Disallow）。
+- 未命中白名单的请求若直接打到后端 → **302 回站点根**，后端不会把裸 HTML 给真人。
+- `og:image` 选取链：文章正文第一张 Markdown 图 → 站点设置 `og_image`（后台「站点管理」新增，
+  公开可读）→ 都没有则省略该标签。
+- 实现：`backend/src/seo.rs`（渲染/转义/UA 白名单，纯逻辑）+ `backend/src/handlers/seo.rs`（HTTP）。
+
+自测（后端直连）：
+
+```bash
+curl -sA "Twitterbot/1.0" http://127.0.0.1:3000/posts/<slug> | head -30   # OG HTML
+curl -sA "Mozilla/5.0" -D - -o /dev/null http://127.0.0.1:3000/posts/<slug>  # 期望 302
+curl -s http://127.0.0.1:3000/robots.txt                                   # 期望含 Sitemap:
+```
+
+完整 Nginx 分流片段见 [`deploy/nginx.conf.example`](deploy/nginx.conf.example)
+（**未在真实 Nginx 上实机验证**）。
 
 ## 目录结构
 

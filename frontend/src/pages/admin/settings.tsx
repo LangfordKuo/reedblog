@@ -25,6 +25,7 @@ export default function AdminSettingsPage() {
   const [footerText, setFooterText] = useState("")
   const [perPage, setPerPage] = useState("10")
   const [baseUrl, setBaseUrl] = useState("")
+  const [ogImage, setOgImage] = useState("")
 
   useEffect(() => {
     document.title = "站点管理 · reedblog"
@@ -38,6 +39,7 @@ export default function AdminSettingsPage() {
         setFooterText(s.footer_text)
         setPerPage(String(s.per_page))
         setBaseUrl(s.base_url)
+        setOgImage(s.og_image)
       })
       .catch((e) => setLoadError(errorMessage(e)))
       .finally(() => setLoading(false))
@@ -64,6 +66,15 @@ export default function AdminSettingsPage() {
         return
       }
     }
+    if (
+      ogImage.trim() &&
+      !ogImage.trim().startsWith("/api/uploads/") &&
+      !ogImage.trim().startsWith("http://") &&
+      !ogImage.trim().startsWith("https://")
+    ) {
+      toast.error("OG 分享图必须以 /api/uploads/ 或 http://、https:// 开头")
+      return
+    }
 
     setSaving(true)
     try {
@@ -75,6 +86,7 @@ export default function AdminSettingsPage() {
         footer_text: footerText,
         per_page: perPageNum,
         base_url: baseUrl.trim(),
+        og_image: ogImage.trim(),
       })
       // 回显服务端规范化后的值（trim / base_url 去尾斜杠）
       setTitle(saved.title)
@@ -84,6 +96,7 @@ export default function AdminSettingsPage() {
       setFooterText(saved.footer_text)
       setPerPage(String(saved.per_page))
       setBaseUrl(saved.base_url)
+      setOgImage(saved.og_image)
       // 刷新前台站点设置的模块级缓存（同标签页回前台立即生效）
       loadSiteSettings(true).catch(() => {})
       toast.success("站点设置已保存")
@@ -214,6 +227,20 @@ export default function AdminSettingsPage() {
               />
               <p className="text-xs text-muted-foreground">
                 RSS feed.xml 与 sitemap.xml 生成绝对链接时使用；留空则回退服务器配置 / 请求头推导
+              </p>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="site-og-image">OG 分享图</Label>
+              <Input
+                id="site-og-image"
+                value={ogImage}
+                onChange={(e) => setOgImage(e.target.value)}
+                placeholder="/api/uploads/… 或 https://…（选填）"
+                maxLength={500}
+              />
+              <p className="text-xs text-muted-foreground">
+                分享到社媒/聊天工具的卡片兜底图；留空则用文章正文第一张图，都没有时不输出
+                og:image
               </p>
             </div>
           </CardContent>

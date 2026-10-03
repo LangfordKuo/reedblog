@@ -3,6 +3,7 @@ import { Link } from "react-router-dom"
 
 import { BlockSpinner } from "@/components/spinner"
 import { api, errorMessage } from "@/lib/api"
+import { applyPageMeta } from "@/lib/meta"
 import type { ArchiveMonth } from "@/lib/types"
 
 export default function ArchivePage() {
@@ -10,7 +11,7 @@ export default function ArchivePage() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    document.title = "归档"
+    applyPageMeta({ title: "归档", path: "/archive" })
     api
       .archive()
       .then(setMonths)

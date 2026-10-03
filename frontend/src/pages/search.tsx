@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { WidgetRegion } from "@/components/widgets"
 import { api, errorMessage } from "@/lib/api"
+import { applyPageMeta } from "@/lib/meta"
 import { useThemeSettings } from "@/lib/theme-settings"
 import { useRegionWidgets } from "@/lib/widgets"
 import type { Page, SearchResult } from "@/lib/types"
@@ -41,6 +42,14 @@ export default function SearchPage() {
 
   // URL 变化（header 再次搜索、前进/后退）时同步输入框
   useEffect(() => setInput(q), [q])
+
+  // 页面级 head 元信息（契约「SEO / 分享元信息」）；canonical 用带查询词的地址
+  useEffect(() => {
+    applyPageMeta({
+      title: q ? `搜索：${q}` : "搜索",
+      path: q ? `/search?q=${encodeURIComponent(q)}` : "/search",
+    })
+  }, [q])
 
   // 查询词变化时重置回第 1 页
   useEffect(() => {

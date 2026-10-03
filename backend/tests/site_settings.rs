@@ -117,7 +117,9 @@ async fn defaults_after_install_and_public_shape() {
             "description": "",
             "icp_number": "",
             "footer_text": "",
-            "per_page": 10
+            "per_page": 10,
+            // 契约「SEO / 分享元信息」新增：分享卡片兜底图，默认为空
+            "og_image": ""
         })
     );
     // 敏感字段 base_url 绝不出现在公开响应
@@ -212,7 +214,9 @@ async fn update_settings_propagates_everywhere() {
             "icp_number": "京ICP备12345678号",
             "footer_text": "本站由 reedblog 驱动",
             "per_page": 5,
-            "base_url": "https://blog.example.com"
+            "base_url": "https://blog.example.com",
+            // 请求未带 og_image → 视为空串（全量更新语义）
+            "og_image": ""
         })
     );
 

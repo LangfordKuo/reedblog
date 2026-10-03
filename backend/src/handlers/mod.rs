@@ -12,6 +12,7 @@ pub mod helpers;
 pub mod install;
 pub mod pages;
 pub mod public;
+pub mod seo;
 pub mod site_auth;
 pub mod site_settings;
 pub mod uploads;

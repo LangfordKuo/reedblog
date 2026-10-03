@@ -122,6 +122,10 @@ server {
 }
 ```
 
+The full snippet including SEO crawler routing lives in
+[`deploy/nginx.conf.example`](deploy/nginx.conf.example) (**not verified against a
+real Nginx** — self-test before going live; see the header comments in that file).
+
 Run the backend (keep a fixed working directory — `config.toml`, `plugins/`,
 `themes/` and the SQLite database file are all resolved relative to it):
 
@@ -134,6 +138,32 @@ Complete the install wizard at `https://blog.example.com/install` on first deplo
 The default bind address is `127.0.0.1`, suited to reverse-proxy setups; to expose
 it directly, change `[server] host` in config.toml. In production, supervise the
 backend with systemd or similar.
+
+## SEO / share metadata (crawler routing)
+
+Crawlers of WeChat / Twitter / Facebook / Slack never execute JS, so SPA runtime
+meta injection is invisible to them. Instead, Nginx routes by User-Agent
+(see the "SEO / share metadata" section of the API contract):
+
+- **Human traffic**: Nginx keeps serving the SPA bundle (unchanged); `frontend/src/lib/meta.ts`
+  injects `document.title`, `meta[name=description]`, `og:title/og:description/og:url` and
+  `link[rel=canonical]` at runtime (every managed tag carries `data-reedblog-meta="1"`).
+- **Crawlers / social previews** (`bot|crawler|spider|facebookexternalhit|…|micromessenger|wechat`,
+  case-insensitive): `/posts/*` and `/pages/*` are proxied to the backend, which returns a minimal
+  HTML page with OG / Twitter / JSON-LD tags; `/robots.txt` is served by the backend too.
+- Requests from unknown UAs that reach the backend directly get a **302 to the site root**.
+- `og:image` fallback chain: first Markdown image in the post body → site setting `og_image`
+  (new field in admin site settings) → tag omitted.
+- Implementation: `backend/src/seo.rs` (rendering/escaping/UA whitelist) +
+  `backend/src/handlers/seo.rs` (HTTP routes).
+
+Self-test:
+
+```bash
+curl -sA "Twitterbot/1.0" http://127.0.0.1:3000/posts/<slug> | head -30   # OG HTML
+curl -sA "Mozilla/5.0" -D - -o /dev/null http://127.0.0.1:3000/posts/<slug>  # expect 302
+curl -s http://127.0.0.1:3000/robots.txt                                   # expect Sitemap:
+```
 
 ## Project layout
 

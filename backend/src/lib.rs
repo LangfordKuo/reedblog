@@ -12,6 +12,7 @@ pub mod packages;
 pub mod pages;
 pub mod plugins;
 pub mod seed;
+pub mod seo;
 pub mod settings;
 pub mod state;
 pub mod theme_settings;
@@ -32,7 +33,8 @@ use config::Config;
 use error::ApiError;
 use handlers::{
     admin_comments, admin_media, admin_pages, admin_plugins, admin_posts, admin_smtp, admin_terms,
-    admin_themes, feed, frontend, install, public, site_auth, site_settings, uploads,
+    admin_themes, feed, frontend, install, public, seo as html_seo, site_auth, site_settings,
+    uploads,
 };
 // handlers::pages 与领域模块 crate::pages 同名，导入时加别名区分
 use handlers::pages as public_pages;
@@ -292,9 +294,18 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
             state.clone(),
             middleware::not_installed_gate,
         ))
-        .with_state(state);
+        .with_state(state.clone());
 
-    Router::new().nest("/api", api).layer(cors)
+    Router::new()
+        // SEO / 分享元信息（契约「SEO / 分享元信息」条款，2026-10-04 新增）：**非 /api** 顶层路由。
+        // 生产由 Nginx 按 UA 把爬虫/社媒预览流量 proxy 到后端（deploy/nginx.conf.example）；
+        // 真人流量走 SPA 静态文件，不经过这里（直接打到后端的普通 UA 会 302 到站点根）。
+        .route("/robots.txt", get(html_seo::robots_txt))
+        .route("/posts/{slug}", get(html_seo::post_html))
+        .route("/pages/{slug}", get(html_seo::page_html))
+        .nest("/api", api)
+        .with_state(state)
+        .layer(cors)
 }
 
 /// 启动时恢复状态：config.toml 可完整加载（含非空 jwt_secret）且数据库可连 → 已安装。

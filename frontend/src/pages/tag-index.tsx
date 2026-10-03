@@ -4,6 +4,7 @@ import { Link } from "react-router-dom"
 import { BlockSpinner } from "@/components/spinner"
 import { Badge } from "@/components/ui/badge"
 import { api, errorMessage } from "@/lib/api"
+import { applyPageMeta } from "@/lib/meta"
 import type { Tag } from "@/lib/types"
 
 export default function TagIndexPage() {
@@ -11,7 +12,7 @@ export default function TagIndexPage() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    document.title = "标签"
+    applyPageMeta({ title: "标签", path: "/tags" })
     api
       .tags()
       .then(setTags)

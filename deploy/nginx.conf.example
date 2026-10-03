@@ -1,0 +1,74 @@
+# reedblog 生产部署参考片段（方案 a：后端按 UA 嗅探给爬虫/社媒预览返回最小 OG HTML）
+#
+# ⚠️ 本机未安装 Nginx，此片段**未在真实 Nginx 上验证**，上线前必须在目标环境自测：
+#   1) curl -A "Twitterbot/1.0" https://blog.example.com/posts/<slug>   # 期望 200 + OG HTML
+#   2) curl -A "Mozilla/5.0 (Windows NT 10.0) Chrome/126.0" https://blog.example.com/posts/<slug>
+#                                                                       # 期望 200 + SPA index.html
+#   3) curl https://blog.example.com/robots.txt                         # 期望含 Sitemap:
+#   4) 浏览器直接打开文章页，确认与分流前无差异（超时/缓存头等）
+#
+# 用法：把 map 与 server 段并入你的站点配置；root 指向 frontend/dist 的部署目录；
+# 后端默认监听 127.0.0.1:3000（backend/config.toml [server] 可改）。
+
+# 爬虫 / 社媒预览 UA 白名单（与后端 seo::is_crawler_ua 保持同款关键字；大小写不敏感）
+map $http_user_agent $reedblog_bot {
+    default 0;
+    ~*(bot|crawler|spider|facebookexternalhit|twitterbot|slackbot|telegrambot|whatsapp|discordbot|googlebot|bingbot|bingpreview|baiduspider|micromessenger|wechat) 1;
+}
+
+server {
+    listen 80;
+    server_name blog.example.com;
+
+    # 前端静态资源 + SPA fallback（真人流量默认路径，与分流前行为一致）
+    root /var/www/reedblog/dist;
+    index index.html;
+
+    # 插件/主题 zip 上传的后端上限是 32MB，Nginx 需对齐
+    client_max_body_size 32m;
+
+    # 后端 API 反向代理
+    location /api/ {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+    }
+
+    # robots.txt 由后端生成（含 Sitemap 绝对地址）
+    location = /robots.txt {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+    }
+
+    # 文章 / 页面详情：命中爬虫白名单 → 后端最小 OG HTML；真人 → 常规 SPA fallback。
+    # 用 error_page 418 做条件 proxy（比 location 内 if + proxy_pass 更稳，规避
+    # "if is evil" 陷阱：if 块内只放 return）。
+    location ~ ^/(posts|pages)/ {
+        error_page 418 = @reedblog_backend;
+        if ($reedblog_bot) {
+            return 418;
+        }
+        try_files $uri /index.html;
+    }
+
+    # 其余路径：静态文件优先，fallback SPA
+    location / {
+        try_files $uri /index.html;
+    }
+
+    location @reedblog_backend {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+    }
+}

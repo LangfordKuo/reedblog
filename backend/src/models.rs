@@ -271,6 +271,8 @@ pub struct SiteSettingsPublic {
     pub icp_number: String,
     pub footer_text: String,
     pub per_page: i64,
+    /// 分享卡片兜底图（契约「SEO / 分享元信息」；公开可读，空串=未设置）
+    pub og_image: String,
 }
 
 /// GET/PUT /api/admin/site/settings 响应（契约 SiteSettingsAdmin = Public + base_url）
@@ -290,6 +292,7 @@ impl From<&crate::settings::SiteSettings> for SiteSettingsPublic {
             icp_number: s.icp_number.clone(),
             footer_text: s.footer_text.clone(),
             per_page: s.per_page,
+            og_image: s.og_image.clone(),
         }
     }
 }
@@ -500,6 +503,9 @@ pub struct SiteSettingsBody {
     pub per_page: i64,
     #[serde(default)]
     pub base_url: Option<String>,
+    /// 分享卡片兜底图（可选；缺失/null 视为空串=清除）
+    #[serde(default)]
+    pub og_image: Option<String>,
 }
 
 impl SiteSettingsBody {
@@ -514,6 +520,7 @@ impl SiteSettingsBody {
             footer_text: self.footer_text.unwrap_or_default().trim().to_string(),
             per_page: self.per_page,
             base_url: trim(self.base_url).trim_end_matches('/').to_string(),
+            og_image: trim(self.og_image),
         }
     }
 }

@@ -3,7 +3,34 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      首页基线 meta（契约「SEO / 分享元信息」条款）：这里是**构建期站点默认值**，
+      运行时由 src/lib/meta.ts 的 applyPageMeta 覆盖（标题/描述/OG/canonical）。
+      爬虫与社媒预览不执行 JS，它们的 OG HTML 由后端按 UA 直接返回（Nginx 分流）。
+
+      注意：这里不放静态 <link rel="canonical">。Vite 的 vite:build-html 会把
+      <link> 的 href 一律当资源解析（DEFAULT_HTML_ASSET_SOURCES.link，不分 rel），
+      指向站点根的 href 会解析到项目根目录并以 EISDIR 炸掉构建。canonical 由
+      meta.ts 运行时注入，爬虫侧由后端 OG HTML 提供，两边都不依赖静态标签。
+    -->
     <meta name="description" content="reedblog - 一个简洁的博客系统" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="reedblog" />
+    <meta property="og:title" content="reedblog" />
+    <meta property="og:description" content="reedblog - 一个简洁的博客系统" />
+    <!-- 静态基线只能用相对路径，运行时覆盖为绝对 URL -->
+    <meta property="og:url" content="/" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="reedblog" />
+    <meta name="twitter:description" content="reedblog - 一个简洁的博客系统" />
+    <!--
+      RSS 自动发现：保留静态标签——首页等非 /posts|/pages 路径不经过后端 UA 分流，
+      非 JS 客户端（含部分 feed 阅读器/扩展）也要能发现 feed。
+      vite-ignore 显式让 Vite 跳过资源解析：否则它会把 href 当资源处理——
+      同名文件存在时会被内联成 data: URL，不存在时仅靠 ENOENT 被静默吞掉；
+      属性本身不会进入构建产物（已实测）。
+    -->
+    <link rel="alternate" type="application/rss+xml" title="RSS" href="/api/feed.xml" vite-ignore />
     <title>reedblog</title>
     <script>
       // 防 FOUC：首绘前按颜色模式偏好（localStorage: reedblog-color-mode，默认 system）

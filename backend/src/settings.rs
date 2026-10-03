@@ -22,6 +22,8 @@ pub const KEY_ICP: &str = "icp_number";
 pub const KEY_FOOTER: &str = "footer_text";
 pub const KEY_PER_PAGE: &str = "per_page";
 pub const KEY_BASE_URL: &str = "base_url";
+/// 分享卡片兜底图（契约「SEO / 分享元信息」条款，2026-10-04 新增）
+pub const KEY_OG_IMAGE: &str = "og_image";
 
 /// per_page 默认值（与契约总则分页默认一致）
 pub const DEFAULT_PER_PAGE: i64 = 10;
@@ -36,6 +38,8 @@ pub struct SiteSettings {
     pub footer_text: String,
     pub per_page: i64,
     pub base_url: String,
+    /// 分享卡片兜底图（可空串；仅 OG HTML 的 og:image 兜底用）
+    pub og_image: String,
 }
 
 /// upsert（连接版）：先 UPDATE，rows_affected=0 再 INSERT。
@@ -113,7 +117,7 @@ pub async fn save(pool: &AnyPool, s: &SiteSettings) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
-fn to_pairs(s: &SiteSettings) -> [(&'static str, String); 7] {
+fn to_pairs(s: &SiteSettings) -> [(&'static str, String); 8] {
     [
         (KEY_TITLE, s.title.clone()),
         (KEY_SUBTITLE, s.subtitle.clone()),
@@ -122,6 +126,7 @@ fn to_pairs(s: &SiteSettings) -> [(&'static str, String); 7] {
         (KEY_FOOTER, s.footer_text.clone()),
         (KEY_PER_PAGE, s.per_page.to_string()),
         (KEY_BASE_URL, s.base_url.clone()),
+        (KEY_OG_IMAGE, s.og_image.clone()),
     ]
 }
 
@@ -152,6 +157,7 @@ pub async fn load(pool: &AnyPool, state: &AppState) -> ApiResult<SiteSettings> {
         footer_text: get(KEY_FOOTER).unwrap_or_default(),
         per_page,
         base_url: get(KEY_BASE_URL).unwrap_or_else(|| state.configured_base_url()),
+        og_image: get(KEY_OG_IMAGE).unwrap_or_default(),
     })
 }
 
@@ -166,6 +172,7 @@ pub fn install_defaults(title: &str, subtitle: &str, base_url: &str) -> SiteSett
         footer_text: String::new(),
         per_page: DEFAULT_PER_PAGE,
         base_url: base_url.trim().trim_end_matches('/').to_string(),
+        og_image: String::new(),
     }
 }
 
@@ -188,6 +195,7 @@ pub fn validate(s: &SiteSettings) -> ApiResult<()> {
     len_ok(&s.icp_number, 100, "ICP 备案号")?;
     len_ok(&s.footer_text, 1000, "页脚文字")?;
     len_ok(&s.base_url, 500, "base_url")?;
+    len_ok(&s.og_image, 500, "og_image")?;
 
     if !(1..=100).contains(&s.per_page) {
         return Err(ApiError::validation(
@@ -203,6 +211,17 @@ pub fn validate(s: &SiteSettings) -> ApiResult<()> {
                 ))
             }
         }
+    }
+    // og_image（契约「SEO / 分享元信息」）：空串允许（=清除）；非空只接受站内
+    // /api/uploads/ 路径或 http(s) 绝对 URL，杜绝 javascript: 等危险 scheme
+    if !s.og_image.is_empty()
+        && !(s.og_image.starts_with("/api/uploads/")
+            || s.og_image.starts_with("http://")
+            || s.og_image.starts_with("https://"))
+    {
+        return Err(ApiError::validation(
+            "og_image 必须以 /api/uploads/ 或 http://、https:// 开头（留空清除）",
+        ));
     }
     Ok(())
 }
@@ -220,6 +239,7 @@ mod tests {
             footer_text: String::new(),
             per_page: DEFAULT_PER_PAGE,
             base_url: String::new(),
+            og_image: String::new(),
         }
     }
 
@@ -256,6 +276,24 @@ mod tests {
         let mut s = base();
         s.description = "长".repeat(1001);
         assert!(validate(&s).is_err(), "超长描述应被拒绝");
+
+        // og_image：仅站内 /api/uploads/ 或 http(s) 绝对 URL，其余一律拒绝
+        for bad in [
+            "javascript:alert(1)",
+            "data:image/png;base64,AAAA",
+            "/uploads/a.png",
+            "images/a.png",
+            "ftp://x.dev/a.png",
+        ] {
+            let mut s = base();
+            s.og_image = bad.to_string();
+            assert!(validate(&s).is_err(), "非法 og_image 应被拒绝: {bad}");
+        }
+        for ok in ["", "/api/uploads/ab/cd.png", "https://cdn.example.com/a.jpg"] {
+            let mut s = base();
+            s.og_image = ok.to_string();
+            assert!(validate(&s).is_ok(), "合法 og_image 应通过: {ok}");
+        }
     }
 
     #[test]

@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { WidgetRegion } from "@/components/widgets"
 import { ApiError, api, errorMessage } from "@/lib/api"
+import { applyPageMeta } from "@/lib/meta"
 import { useThemeSettings } from "@/lib/theme-settings"
 import { extractTocHeadings, setTocHeadings, shouldRenderToc, useTocHeadings } from "@/lib/toc"
 import { cn, formatDate } from "@/lib/utils"
@@ -45,7 +46,14 @@ export default function PostDetailPage() {
         if (cancelled) return
         setPost(p)
         setStatus("ok")
-        document.title = p.title
+        // 运行时 head 元信息（契约「SEO / 分享元信息」）：标题/描述/OG/canonical；
+        // 爬虫流量由后端按 UA 返回 OG HTML，不经这里
+        applyPageMeta({
+          title: p.title,
+          description: p.excerpt || undefined,
+          path: `/posts/${encodeURIComponent(p.slug)}`,
+          type: "article",
+        })
       })
       .catch((e) => {
         if (cancelled) return

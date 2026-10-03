@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import { ApiError, api, errorMessage } from "@/lib/api"
+import { applyPageMeta } from "@/lib/meta"
 import type { PageDetail } from "@/lib/types"
 
 type Status = "loading" | "ok" | "notfound" | "error"
@@ -34,7 +35,12 @@ export default function PageDetailPage() {
         if (cancelled) return
         setPage(p)
         setStatus("ok")
-        document.title = p.title
+        // 运行时 head 元信息（契约「SEO / 分享元信息」）：页面无 excerpt，描述回退站点描述
+        applyPageMeta({
+          title: p.title,
+          path: `/pages/${encodeURIComponent(p.slug)}`,
+          type: "website",
+        })
       })
       .catch((e) => {
         if (cancelled) return

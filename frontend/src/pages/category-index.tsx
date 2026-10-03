@@ -4,6 +4,7 @@ import { FolderIcon } from "lucide-react"
 
 import { BlockSpinner } from "@/components/spinner"
 import { api, errorMessage } from "@/lib/api"
+import { applyPageMeta } from "@/lib/meta"
 import type { Category } from "@/lib/types"
 
 export default function CategoryIndexPage() {
@@ -11,7 +12,7 @@ export default function CategoryIndexPage() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    document.title = "分类"
+    applyPageMeta({ title: "分类", path: "/categories" })
     api
       .categories()
       .then(setCategories)

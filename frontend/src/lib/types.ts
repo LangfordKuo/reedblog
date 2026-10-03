@@ -14,6 +14,8 @@ export interface SiteSettings {
   icp_number: string
   footer_text: string
   per_page: number
+  /** 分享卡片兜底图（契约「SEO / 分享元信息」；空串=未设置） */
+  og_image: string
 }
 
 /** GET/PUT /api/admin/site/settings 响应（契约 SiteSettingsAdmin） */
@@ -30,6 +32,7 @@ export interface SiteSettingsSaveBody {
   footer_text?: string
   per_page: number
   base_url?: string
+  og_image?: string
 }
 
 /** SMTP TLS 模式（契约「邮件通知」条款） */

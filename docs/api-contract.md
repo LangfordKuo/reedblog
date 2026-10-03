@@ -66,7 +66,8 @@ PostRevisionSummary = {id, post_id, title, content_chars: int, created_at}
                // 都不返回），content_chars 为 content_md 的 Unicode 字符数，见「文章修订历史」
 PostRevision        = PostRevisionSummary + {content_md, excerpt}
                // 单条完整修订（含正文，供前端差异对比）
-SiteSettingsPublic = {title, subtitle, description, icp_number, footer_text, per_page: int}
+SiteSettingsPublic = {title, subtitle, description, icp_number, footer_text, per_page: int,
+                      og_image: string}   // og_image：2026-10-04 SEO 条款新增，空串=未设置
 SiteSettingsAdmin  = SiteSettingsPublic + {base_url}   // base_url 为敏感字段，公开接口不返回
 SiteStats      = {post_count: int, comment_count: int, installed_at: string,
                   total_views: int}
@@ -198,12 +199,71 @@ RSS 与 sitemap（2026-10-03 新增；base_url 来源 2026-10-03 更新为站点
     按 sort_order ASC 排在文章之后）、
     标签索引 `{base}/tags`、分类索引 `{base}/categories`、归档 `{base}/archive`
 
+SEO / 分享元信息（2026-10-04 新增；方案 a：后端按 UA 嗅探给爬虫/社媒预览返回最小 OG HTML）：
+
+部署形态与动机：生产部署是「前端构建产物（SPA）静态文件由 Nginx 直接服务，`/api` 反代到后端，
+其余路径 fallback 到 `index.html`」。SPA 的运行时 meta 注入微信 / Twitter / Facebook / Slack 等
+抓取器**看不到**（它们不执行 JS），因此由 Nginx 按 UA 分流：命中爬虫/社媒预览白名单的页面请求
+proxy 到后端，后端直接返回带 OG/Twitter/JSON-LD 的最小 HTML；真人流量仍由 Nginx 送 SPA，行为不变。
+参考部署片段见 `deploy/nginx.conf.example`（**本机未在真实 Nginx 上验证**，上线前需自测）。
+
+### HTML 路由（**非 /api**；已安装后可用，无需鉴权）
+- 未安装状态下与其余公开接口同口径 → 503 `not_installed`（不进未安装门禁白名单）
+- `GET /posts/:slug`、`GET /pages/:slug` → `text/html; charset=utf-8`
+  - **UA 命中爬虫/社媒预览白名单**（大小写不敏感子串匹配；关键字：
+    `bot`、`crawler`、`spider`、`facebookexternalhit`、`twitterbot`、`slackbot`、`telegrambot`、
+    `whatsapp`、`discordbot`、`googlebot`、`bingbot`、`bingpreview`、`baiduspider`、
+    `micromessenger`、`wechat`）
+    → 200 + 最小 OG HTML（模板见下）
+  - **未命中（真人 / 普通 UA）** → 302 重定向到站点根（`Location: {base}/`），
+    避免把裸 HTML 给真人；`{base}` 用「RSS 与 sitemap」同款三级优先规则
+  - 文章不存在 / 草稿 / 未到点 scheduled / **回收站** → 404 `not_found`
+    （与公开可见性同口径，复用 `VISIBLE_POST_SQL`）
+  - 页面不存在 / 停用 → 404 `not_found`（与 `GET /api/pages/:slug` 同口径）
+- `GET /robots.txt` → `text/plain; charset=utf-8`；`{base}` 同款三级优先（用于 Sitemap 行）：
+  ```
+  User-agent: *
+  Allow: /
+  Disallow: /admin
+  Disallow: /api/admin
+
+  Sitemap: {base}/api/sitemap.xml
+  ```
+
+### 最小 OG HTML 模板（手写字符串拼接，**不引新依赖**）
+含：`<title>`、`<meta name="description">`、`<link rel="canonical">`、
+`<link rel="alternate" type="application/rss+xml">`、
+`og:type`（文章 `article` / 页面 `website`）、`og:title`、`og:description`、`og:url`、`og:site_name`、
+可选 `og:image`、`twitter:card`（有图 `summary_large_image` / 无图 `summary`）、
+`twitter:title`/`twitter:description`/可选 `twitter:image`、
+`<script type="application/ld+json">`（文章 `BlogPosting`：headline/description/datePublished/
+dateModified/author/publisher/mainEntityOfPage/url/wordCount/可选 image；页面 `WebPage`）与一个
+指向原文的 body 链接（标题 + 描述，不放正文，避免重复内容）。
+
+- RSS 自动发现：`<link rel="alternate" type="application/rss+xml" href="{base}/api/feed.xml">`
+  （2026-10-04 新增；非 JS 爬虫在 OG HTML 里直接发现 feed，`{base}` 用「RSS 与 sitemap」
+  同款三级优先规则。SPA 侧 index.html 的静态同款标签由前端负责，本端只保证此模板）
+
+- **所有插值必须 HTML 转义**（`& < > " '`），标题/描述/正文文本一律不得原样插入
+  （防 `<script>` 等 XSS）；JSON-LD 由 serde_json 序列化后再把 `<`/`>`/`&` 转成
+  JSON 的 unicode 转义序列（`u003c` / `u003e` / `u0026` 形式，前缀为反斜杠），防 `</script>` 截断
+- **绝不输出**鉴权信息、草稿 / 回收站内容；description 只取 excerpt 或正文纯文本摘要，
+  不含任何正文 HTML
+- description：文章 = `excerpt`（为空时按「excerpt 回退」条款从正文推导）；
+  页面 = 正文纯文本按同款规则截断（≤200 字符）
+- `og:url` / canonical = `{base}/posts/{slug}`（页面 `{base}/pages/{slug}`，slug 百分号编码）
+- `og:image` 选取链：**正文第一张 Markdown 图片**（`![alt](url)`，跳过代码围栏内）
+  → 站点设置 `og_image` → 都没有则**省略该标签**；相对 URL 统一补成绝对 URL（基于 `{base}`）
+- JSON-LD wordCount：正文剥成纯文本后按非空白字符数估算
+
 站点设置（2026-10-03 新增）：
 - 存储：`settings` 表（key-value：`name` 主键 / `value` / `updated_at`，SQLite/MySQL 共用 SQL，Any 驱动）；
   时间戳沿用全库 RFC3339 UTC 文本惯例
 - 字段（键名）：`site_title`（站点名称）、`site_subtitle`（副标题/口号）、`site_description`
   （meta 描述）、`icp_number`（ICP 备案号，选填）、`footer_text`（页脚自定义文字，选填）、
-  `per_page`（每页文章数，默认 10）、`base_url`（RSS/sitemap 绝对 URL 覆盖，选填）
+  `per_page`（每页文章数，默认 10）、`base_url`（RSS/sitemap 绝对 URL 覆盖，选填）、
+  `og_image`（分享卡片兜底图，2026-10-04 SEO 条款新增，选填；
+  公开可读，仅用于 OG HTML 的 og:image 兜底，见「SEO / 分享元信息」）
 - 默认值：**安装时写入**——title/subtitle 取安装请求 `site.title`/`site.subtitle`，
   base_url 初始值取 config.toml `[server] base_url`（可为空），per_page=10，其余为空串；
   升级安装（表存在但无行）时按键回退同款默认值（title/subtitle 回退 config.toml `[site]`）
@@ -212,13 +272,15 @@ RSS 与 sitemap（2026-10-03 新增；base_url 来源 2026-10-03 更新为站点
   - **不含 base_url 等敏感字段**；不进未安装门禁白名单，未安装 → 503 `not_installed`
 - `GET /api/admin/site/settings`（Bearer）→ `SiteSettingsAdmin`（全部字段，含 base_url）
 - `PUT /api/admin/site/settings`（Bearer）→ 200 `SiteSettingsAdmin`（更新后的完整设置）
-  - body: `{title, subtitle?, description?, icp_number?, footer_text?, per_page, base_url?}`
+  - body: `{title, subtitle?, description?, icp_number?, footer_text?, per_page, base_url?, og_image?}`
     （可选字段缺失/null 视为空串；全量更新语义）
   - 校验（失败 → 422 `validation_error`）：
     - title trim 后非空，≤255 字符；subtitle ≤255；description ≤1000；icp_number ≤100；
-      footer_text ≤1000；base_url ≤500
+      footer_text ≤1000；base_url ≤500；og_image ≤500
     - per_page 整数 1~100
     - base_url 非空时必须是合法绝对 URL 且 scheme 为 http/https
+    - og_image 空串允许（=清除）；非空时必须以 `/api/uploads/` 开头或
+      以 `http://`/`https://` 开头（禁止 `javascript:` 等其它 scheme）
   - 未登录/token 无效 → 401 `unauthorized`
 - 联动读取（改为读站点设置而非硬编码/config.toml）：
   - `GET /api/site` 的 title/subtitle

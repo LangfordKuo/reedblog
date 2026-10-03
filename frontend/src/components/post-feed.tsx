@@ -7,6 +7,7 @@ import { BlockSpinner } from "@/components/spinner"
 import { Badge } from "@/components/ui/badge"
 import { WidgetRegion } from "@/components/widgets"
 import { api, errorMessage } from "@/lib/api"
+import { applyPageMeta } from "@/lib/meta"
 import { useThemeSettings } from "@/lib/theme-settings"
 import { formatDate } from "@/lib/utils"
 import { useRegionWidgets } from "@/lib/widgets"
@@ -32,6 +33,19 @@ export function PostFeed({ tag, category, year, month, heading }: PostFeedProps)
   const [data, setData] = useState<Page<PostPublic> | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  // 页面级 head 元信息（契约「SEO / 分享元信息」）：首页（heading 缺省=站点名）
+  // 与标签/分类/归档月份列表页共用
+  useEffect(() => {
+    const path = tag
+      ? `/tags/${encodeURIComponent(tag)}`
+      : category
+        ? `/categories/${encodeURIComponent(category)}`
+        : year && month
+          ? `/archive/${year}/${month}`
+          : "/"
+    applyPageMeta({ title: heading, path })
+  }, [tag, category, year, month, heading])
 
   // 筛选条件变化时重置回第 1 页
   useEffect(() => {
