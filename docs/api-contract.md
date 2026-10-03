@@ -22,10 +22,17 @@ PostAdmin    = {id, title, slug, content_md, excerpt, status: "draft"|"published
                 published_at|null, created_at, updated_at}
 Category     = {id, name, post_count}
 Tag          = {id, name, post_count}
-CommentPub   = {id, author_name, content, created_at}
+CommentPub   = {id, author_name, content, created_at,
+                parent_id|null, reply_to_id|null, reply_to_name|null}
+               // 2026-10-03 嵌套评论新增：parent_id=所属顶级楼层 id（顶级评论本身为 null）；
+               // reply_to_id=被回复的中间楼层 id（仅「回复的回复」非 null）；
+               // reply_to_name=被回复人作者名（JOIN 冗余，reply_to_id 为 null 时同为 null）
 CommentAdmin = {id, post_id, post_title, author_name, email|null, content,
                 status: "approved"|"hidden", created_at,
-                target_type: "post"|"page"}   // 2026-10-03 页面功能扩展，见「页面」
+                target_type: "post"|"page",   // 2026-10-03 页面功能扩展，见「页面」
+                parent_id|null, reply_to_id|null, reply_to_name|null,
+                reply_count: int}             // 2026-10-03 嵌套评论新增：直接子回复条数
+                                              // （两级存储下即整线程楼层数；子回复恒 0）
 PageKind     = "custom" | "message_board" | "links"
 PageSummary  = {id, title, slug, kind: PageKind, sort_order}
 PageLink     = {id, name, url, description, sort_order}
@@ -70,10 +77,12 @@ WidgetAdmin    = WidgetConfig + {source: WidgetSource, enabled: bool, params: [T
     comment_count 为既有 SELECT 别名，SQLite/MySQL 均支持按别名排序）；其他值 → 422 `validation_error`
 - excerpt 为空时的回退（2026-10-03 定）：由 content_md 生成**纯文本**摘要（剥离 Markdown 语法：标题#、强调符、代码围栏、表格线、链接保留文字），截断至 ≤200 字符；不得返回含 Markdown 符号的原文
 - `GET /api/posts/:slug` → `PostDetail`；不存在/未发布 → 404 `not_found`
-- `GET /api/posts/:slug/comments` → `[CommentPub]`（仅 approved，按时间 ASC）
+- `GET /api/posts/:slug/comments` → `[CommentPub]`（仅 approved 且线程可见，按时间 ASC, id ASC；
+  仍为平铺数组，两级树由前端按 parent_id 自行组装，见「评论回复」）
 - `POST /api/posts/:slug/comments` → 201 `CommentPub`
-  - body: `{author_name, email?, content}`；必填校验 422 `validation_error`
+  - body: `{author_name, email?, content, parent_id?}`；必填校验 422 `validation_error`
   - 默认先发后审：创建即 approved
+  - 带 parent_id 时为回复（楼中楼）：校验与两级归一化见「评论回复」
 - `GET /api/tags` → `[Tag]`（post_count 只统计 published）
 - `GET /api/categories` → `[Category]`（同上）
 - `GET /api/archive` → `[{"year": int, "month": int, "count": int}]`，仅 published，按年月 DESC
@@ -170,10 +179,12 @@ RSS 与 sitemap（2026-10-03 新增；base_url 来源 2026-10-03 更新为站点
   同时是前台顶栏导航「首页 + 启用页面」的数据源
 - `GET /api/pages/:slug` → `PageDetail`；不存在/**停用** → 404 `not_found`；
   kind=links 时 links 为该页链接（sort_order ASC, id ASC），其余 kind 恒为 `[]`
-- `GET /api/pages/:slug/comments` → `[CommentPub]`（仅 approved，时间 ASC）
+- `GET /api/pages/:slug/comments` → `[CommentPub]`（仅 approved 且线程可见，时间 ASC, id ASC；
+  形状与线程规则同文章评论，见「评论回复」）
 - `POST /api/pages/:slug/comments` → 201 `CommentPub`，body 与文章评论相同
-  `{author_name, email?, content}`；必填校验 422 `validation_error`；先发后审（创建即 approved）；
-  comment.before_create 钩子链同样生效（ctx.post_slug = 页面 slug）
+  `{author_name, email?, content, parent_id?}`；必填校验 422 `validation_error`；先发后审（创建即 approved）；
+  comment.before_create 钩子链同样生效（ctx.post_slug = 页面 slug）；
+  回复（parent_id）与文章评论同一套机制：校验/两级归一化/连带删除/隐藏线程过滤见「评论回复」
 - 留言/页面评论仅限 kind=message_board 的启用页面；其余 kind 或停用页 → 404 `not_found`
 
 留言与评论模型的整合（对现有契约破坏最小的方案）：
@@ -268,6 +279,43 @@ docs/extensibility-contract.md「主题组件」与 docs/theme-development.md「
 - 生效方式：前台按 position+sort_order 渲染；后台保存后前端 store 重新拉取即时生效，
   无需刷新
 
+## 评论回复（楼中楼，2026-10-03 新增）
+
+文章评论与留言板留言共用同一套回复机制（仅 target_type 不同，字段与校验规则完全一致）。
+
+- 存储：`comments` 表新增 `parent_id`、`reply_to_id` 两个可空整数列（SQLite/MySQL 各一份
+  migration，ADD COLUMN 双方言均可；SQLite 的 ADD COLUMN 不支持内联自引用 FK，
+  自引用一致性由应用层校验保证）
+- **两级归一化（Typecho/WP 风格）**：存储上永远两级——
+  - `parent_id` 恒指向线程的**顶级祖先**（楼层）：直接回复顶级评论时 parent_id=该评论 id、
+    reply_to_id=null；回复某条中间楼层时，新评论的 parent_id 被**改写为**该楼层的顶级祖先 id，
+    同时 `reply_to_id`=实际被回复的楼层 id（显示层据此渲染「回复 @某人」）
+  - 归一化在写入前完成；comment.before_create 钩子拿到的即是归一化后的值
+- POST body（文章/留言板两处相同）新增可选 `parent_id`（缺省即顶级评论）。
+  校验（失败 → 422 `validation_error`，带明确 message）：
+  - 父评论必须存在（「父评论不存在」）
+  - 父评论必须与本次请求同目标：target_type 与目标 id 均一致（「不能回复其他目标下的评论」）
+  - 父评论 status 必须为 approved（「不能回复已隐藏的评论」）
+- comment.before_create 钩子对回复同样生效：入参 ctx 新增 `parent_id`、`reply_to_id`
+  （INT，0 表示无；见 docs/extensibility-contract.md）；block 同样短路 → 403 `comment_blocked`
+- 公开列表（`GET /api/posts/:slug/comments` 与 `GET /api/pages/:slug/comments`）：
+  仍返回**平铺数组**（仅 approved，按 created_at ASC, id ASC），每项新增
+  parent_id/reply_to_id/reply_to_name（reply_to_name 为 JOIN 取到的被回复人作者名，
+  reply_to_id 为 null 时同为 null）；前端按 parent_id 自行组两级树
+- **隐藏线程过滤**：顶级评论被 hidden 时整条线程不出现在公开列表
+  （公开查询把 parent_id 指向非 approved 评论的子回复一并排除）；子回复自身 status
+  不连带变更——父恢复 approved 后线程整体重新可见
+- **comment_count**（文章列表/详情）：口径与公开列表一致——只统计前台可见的评论
+  （approved 且线程可见），线程内所有 visible 评论都计数
+- 管理端：
+  - `CommentAdmin` 新增 parent_id/reply_to_id/reply_to_name/reply_count
+    （reply_count=直接子回复条数，两级存储下即整线程楼层数，供后台提示
+    「删除将连带删除 N 条回复」；子回复的 reply_count 恒为 0）
+  - 列表排序不变（created_at DESC），父子回复在列表中不强制相邻，线程关系由字段表达
+  - **连带删除**：`DELETE /api/admin/comments/:id` 删除顶级评论时连带删除其全部子回复
+    （仍 204）；删除子回复只删自身；id 不存在 → 404 `not_found`
+  - 隐藏顶级评论（`PUT` status=hidden）不改子回复 status，仅前台整线程过滤
+
 ## 鉴权
 - `POST /api/auth/login` body `{username, password}` → 200 `AuthResult`；错误 → 401 `invalid_credentials`
 - `GET /api/auth/me`（Bearer）→ `{"username"}`；无效/过期 → 401 `unauthorized`
@@ -290,11 +338,14 @@ docs/extensibility-contract.md「主题组件」与 docs/theme-development.md「
 - 名称唯一，重复 → 409 `duplicate_name`
 
 评论（2026-10-03 页面功能扩展：列表含页面留言，响应带 `target_type` 区分来源文章/页面，
-`post_id`/`post_title` 语义扩展为「目标 id / 目标标题」，见「页面」）：
-- `GET /api/admin/comments?status=<approved|hidden|all>&post_id=&page&per_page` → 分页 `[CommentAdmin]`，created_at DESC
+`post_id`/`post_title` 语义扩展为「目标 id / 目标标题」，见「页面」；
+2026-10-03 嵌套评论扩展：响应新增 parent_id/reply_to_id/reply_to_name/reply_count，
+删除顶级评论连带删除子回复，见「评论回复」）：
+- `GET /api/admin/comments?status=<approved|hidden|all>&post_id=&page&per_page` → 分页 `[CommentAdmin]`，created_at DESC（排序不变，父子不强制相邻；时间戳秒精度，同秒行以 id DESC 兜底保证确定性）
   - `post_id` 过滤仅匹配来源为文章的评论（target_type='post' 且目标 id 相等）
 - `PUT /api/admin/comments/:id` body `{status}` → `CommentAdmin`
-- `DELETE /api/admin/comments/:id` → 204
+  （隐藏顶级评论时前台整线程过滤，子回复 status 不连带变更）
+- `DELETE /api/admin/comments/:id` → 204（顶级评论**连带删除其全部子回复**；子回复只删自身）
 
 图片上传（2026-10-03 新增）：
 - `POST /api/admin/uploads`（multipart/form-data，字段名 `file`）→ 200 `UploadResult`

@@ -12,13 +12,13 @@ use crate::models::{
     normalize_paging, ArchiveEntry, Category, CategoryRef, CommentPub, CreateCommentRequest, Page,
     PostDetail, PostPublic, PostsQuery, SearchQuery, SearchResult, Tag,
 };
-use crate::state::{now_rfc3339, require_pool, AppState};
+use crate::state::{require_pool, AppState};
 
 use super::helpers::{
-    derive_excerpt, escape_like, fetch_post_tags, last_insert_id_on, make_snippet,
-    md_to_plain_text, render_markdown, split_search_terms,
+    create_comment_pipeline, derive_excerpt, escape_like, fetch_post_tags, make_snippet,
+    md_to_plain_text, render_markdown, row_to_comment_pub, split_search_terms,
+    PUBLIC_COMMENT_COLUMNS, PUBLIC_COMMENT_FROM, PUBLIC_COMMENT_THREAD_FILTER,
 };
-use crate::plugins::CommentDecision;
 
 /// 把文章行（列表/详情共用列集）转成 PostPublic
 async fn row_to_post_public(pool: &AnyPool, r: &AnyRow) -> ApiResult<PostPublic> {
@@ -55,9 +55,15 @@ async fn row_to_post_public(pool: &AnyPool, r: &AnyRow) -> ApiResult<PostPublic>
 }
 
 // content_md 仅用于 excerpt 为空时推导摘要，不出现在 PostPublic 响应里（契约：列表不含 content_md）
+// comment_count 口径与公开评论列表一致（契约「评论回复」条款）：只统计前台可见评论——
+// approved、target_type='post'（post_id 列复用为通用目标 id，须防页面留言串号）、
+// 且线程可见（hidden 顶级评论的子回复不计；线程内所有 visible 评论都计数）
 const PUBLIC_POST_COLUMNS: &str = "p.id, p.title, p.slug, p.excerpt, p.content_md, p.category_id, \
      c.name AS category_name, p.published_at, \
-     (SELECT COUNT(*) FROM comments m WHERE m.post_id = p.id AND m.status = 'approved') AS comment_count";
+     (SELECT COUNT(*) FROM comments m WHERE m.target_type = 'post' AND m.post_id = p.id \
+      AND m.status = 'approved' \
+      AND (m.parent_id IS NULL OR EXISTS (SELECT 1 FROM comments mp WHERE mp.id = m.parent_id \
+          AND mp.status = 'approved'))) AS comment_count";
 
 /// 公开列表分页归一化：显式 per_page 优先（钳 1~100）；未传时默认值取站点设置的
 /// per_page（契约「总则-分页」2026-10-03 条款）
@@ -284,36 +290,31 @@ async fn find_published_post(pool: &AnyPool, slug: &str) -> ApiResult<i64> {
     Ok(row.ok_or_else(ApiError::not_found)?.get::<i64, _>("id"))
 }
 
-/// GET /api/posts/:slug/comments → [CommentPub]（仅 approved，时间 ASC）
+/// GET /api/posts/:slug/comments → [CommentPub]（仅 approved 且线程可见，时间 ASC, id ASC）
+///
+/// 仍为平铺数组（契约「评论回复」条款）：每项带 parent_id/reply_to_id/reply_to_name，
+/// 两级树由前端组装；hidden 顶级评论的子回复一并排除（PUBLIC_COMMENT_THREAD_FILTER）。
 pub async fn list_comments(
     State(state): State<AppState>,
     Path(slug): Path<String>,
 ) -> ApiResult<Json<Vec<CommentPub>>> {
     let (pool, _db_type) = require_pool(&state).await?;
     let post_id = find_published_post(&pool, &slug).await?;
-    let rows = sqlx::query(
-        "SELECT id, author_name, content, created_at FROM comments \
-         WHERE post_id = ? AND status = 'approved' ORDER BY created_at ASC",
-    )
-    .bind(post_id)
-    .fetch_all(&pool)
-    .await?;
-    Ok(Json(
-        rows.iter()
-            .map(|r| CommentPub {
-                id: r.get::<i64, _>("id"),
-                author_name: r.get::<String, _>("author_name"),
-                content: r.get::<String, _>("content"),
-                created_at: r.get::<String, _>("created_at"),
-            })
-            .collect(),
-    ))
+    let sql = format!(
+        "SELECT {PUBLIC_COMMENT_COLUMNS} {PUBLIC_COMMENT_FROM} \
+         WHERE c.target_type = 'post' AND c.post_id = ? AND c.status = 'approved' \
+         AND {PUBLIC_COMMENT_THREAD_FILTER} \
+         ORDER BY c.created_at ASC, c.id ASC"
+    );
+    let rows = sqlx::query(&sql).bind(post_id).fetch_all(&pool).await?;
+    Ok(Json(rows.iter().map(row_to_comment_pub).collect()))
 }
 
 /// POST /api/posts/:slug/comments → 201 CommentPub（先发后审：创建即 approved）
 ///
-/// comment.before_create 钩子链（扩展契约）：任一插件返回 block 立即短路 → 403 comment_blocked
-/// （reason 进 message）；allow 可携带修改后的字段。插件运行时错误跳过、不阻断。
+/// 走评论共用创建管线（helpers::create_comment_pipeline）：body 可选 parent_id
+/// （回复/楼中楼），父评论校验与两级归一化、comment.before_create 钩子链
+/// （block → 403 comment_blocked，ctx 带 parent_id/reply_to_id）见契约「评论回复」条款。
 pub async fn create_comment(
     State(state): State<AppState>,
     Path(slug): Path<String>,
@@ -322,75 +323,18 @@ pub async fn create_comment(
     let Json(req) = body.map_err(ApiError::from)?;
     let (pool, db_type) = require_pool(&state).await?;
     let post_id = find_published_post(&pool, &slug).await?;
-
-    let author_name = req.author_name.trim();
-    let content = req.content.trim();
-    if author_name.is_empty() {
-        return Err(ApiError::validation("author_name 不能为空"));
-    }
-    if content.is_empty() {
-        return Err(ApiError::validation("content 不能为空"));
-    }
-    let email = req
-        .email
-        .map(|e| e.trim().to_string())
-        .filter(|e| !e.is_empty());
-
-    let (author_name, email, content) = match state
-        .plugins()
-        .run_comment_before_create(&slug, author_name, email.as_deref(), content)
-        .await
-    {
-        CommentDecision::Block { reason } => {
-            let message = if reason.trim().is_empty() {
-                "评论被插件拦截".to_string()
-            } else {
-                reason
-            };
-            return Err(ApiError::new(
-                StatusCode::FORBIDDEN,
-                "comment_blocked",
-                message,
-            ));
-        }
-        CommentDecision::Allow {
-            author_name,
-            email,
-            content,
-        } => (author_name, email, content),
-    };
-    // 插件改写后的字段仍需满足基本约束
-    if author_name.trim().is_empty() {
-        return Err(ApiError::validation("author_name 不能为空"));
-    }
-    if content.trim().is_empty() {
-        return Err(ApiError::validation("content 不能为空"));
-    }
-
-    let created_at = now_rfc3339();
-    let mut conn = pool.acquire().await?;
-    sqlx::query(
-        "INSERT INTO comments (post_id, author_name, email, content, status, created_at) \
-         VALUES (?, ?, ?, ?, 'approved', ?)",
+    let created = create_comment_pipeline(
+        &state,
+        &pool,
+        &db_type,
+        "post",
+        post_id,
+        &slug,
+        req,
+        "评论被插件拦截",
     )
-    .bind(post_id)
-    .bind(author_name.trim())
-    .bind(email.as_deref().map(str::trim).filter(|e| !e.is_empty()))
-    .bind(content.trim())
-    .bind(&created_at)
-    .execute(&mut *conn)
     .await?;
-    let id = last_insert_id_on(&mut conn, &db_type).await?;
-
-    Ok((
-        StatusCode::CREATED,
-        Json(CommentPub {
-            id,
-            author_name: author_name.trim().to_string(),
-            content: content.trim().to_string(),
-            created_at,
-        }),
-    ))
+    Ok((StatusCode::CREATED, Json(created)))
 }
 
 /// GET /api/tags → [Tag]（post_count 只统计 published）

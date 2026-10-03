@@ -14,13 +14,18 @@ use super::helpers::check_auth;
 // 页面功能扩展（契约「页面」条款）：评论目标可以是文章或页面（target_type 区分）。
 // post_id/post_title 字段名保留、语义扩展为「目标 id / 目标标题」：
 // 来源标题按 target_type 分别 LEFT JOIN posts / pages 后 COALESCE 取之。
+// 嵌套评论扩展（契约「评论回复」条款）：parent_id/reply_to_id/reply_to_name（rt 自 JOIN）
+// + reply_count（直接子回复条数，供后台「删除将连带删除 N 条回复」提示；子回复恒 0）。
 const ADMIN_COMMENT_COLUMNS: &str = "c.id, c.post_id, c.target_type, \
      COALESCE(p.title, pg.title, '') AS post_title, \
-     c.author_name, c.email, c.content, c.status, c.created_at";
+     c.author_name, c.email, c.content, c.status, c.created_at, \
+     c.parent_id, c.reply_to_id, rt.author_name AS reply_to_name, \
+     (SELECT COUNT(*) FROM comments r WHERE r.parent_id = c.id) AS reply_count";
 
 const ADMIN_COMMENT_FROM: &str = "FROM comments c \
      LEFT JOIN posts p ON p.id = c.post_id AND c.target_type = 'post' \
-     LEFT JOIN pages pg ON pg.id = c.post_id AND c.target_type = 'page'";
+     LEFT JOIN pages pg ON pg.id = c.post_id AND c.target_type = 'page' \
+     LEFT JOIN comments rt ON rt.id = c.reply_to_id";
 
 fn row_to_comment_admin(r: &sqlx::any::AnyRow) -> CommentAdmin {
     CommentAdmin {
@@ -35,6 +40,12 @@ fn row_to_comment_admin(r: &sqlx::any::AnyRow) -> CommentAdmin {
         target_type: r
             .try_get::<String, _>("target_type")
             .unwrap_or_else(|_| "post".to_string()),
+        parent_id: r.try_get::<Option<i64>, _>("parent_id").unwrap_or(None),
+        reply_to_id: r.try_get::<Option<i64>, _>("reply_to_id").unwrap_or(None),
+        reply_to_name: r
+            .try_get::<Option<String>, _>("reply_to_name")
+            .unwrap_or(None),
+        reply_count: r.try_get::<i64, _>("reply_count").unwrap_or(0),
     }
 }
 
@@ -87,9 +98,10 @@ pub async fn admin_list_comments(
     }
     let total: i64 = cq.fetch_one(&pool).await?.get(0);
 
+    // created_at DESC（主序不变）；时间戳为秒精度，同秒行以 id DESC 兜底保证确定性
     let list_sql = format!(
         "SELECT {ADMIN_COMMENT_COLUMNS} {ADMIN_COMMENT_FROM} \
-         {where_sql} ORDER BY c.created_at DESC LIMIT ? OFFSET ?"
+         {where_sql} ORDER BY c.created_at DESC, c.id DESC LIMIT ? OFFSET ?"
     );
     let mut lq = sqlx::query(&list_sql);
     if let Some(s) = &status_param {
@@ -142,6 +154,10 @@ pub async fn admin_update_comment(
 }
 
 /// DELETE /api/admin/comments/:id → 204
+///
+/// 连带删除（契约「评论回复」条款）：删除顶级评论时其全部子回复一并删除
+/// （两级存储下所有线程成员的 parent_id 恒指顶级 id，单条 DELETE 即覆盖）；
+/// 删除子回复只删自身；id 不存在 → 404。
 pub async fn admin_delete_comment(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -150,7 +166,8 @@ pub async fn admin_delete_comment(
     check_auth(&state, &headers).await?;
     let (pool, _db_type) = require_pool(&state).await?;
 
-    let deleted = sqlx::query("DELETE FROM comments WHERE id = ?")
+    let deleted = sqlx::query("DELETE FROM comments WHERE id = ? OR parent_id = ?")
+        .bind(id)
         .bind(id)
         .execute(&pool)
         .await?

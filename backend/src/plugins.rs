@@ -594,13 +594,19 @@ impl PluginHost {
         out_html
     }
 
-    /// comment.before_create 链：任一插件 block 立即短路；allow 时可携带修改后字段
+    /// comment.before_create 链：任一插件 block 立即短路；allow 时可携带修改后字段。
+    ///
+    /// 对回复（楼中楼）同样生效（契约「评论回复」条款）：parent_id/reply_to_id 为
+    /// **两级归一化后**的最终存储值，以 INT 进 ctx（None → 0，扩展契约文档口径）；
+    /// 只读——allow 返回 map 中即使改写也不回写存储（可改写字段仍是 author/email/content）。
     pub async fn run_comment_before_create(
         &self,
         post_slug: &str,
         author_name: &str,
         email: Option<&str>,
         content: &str,
+        parent_id: Option<i64>,
+        reply_to_id: Option<i64>,
     ) -> CommentDecision {
         let hook_id = "comment.before_create";
         let (mut author, mut mail, mut body) = (
@@ -614,6 +620,8 @@ impl PluginHost {
             ctx.insert("author_name".into(), author.clone().into());
             ctx.insert("email".into(), mail.clone().into());
             ctx.insert("content".into(), body.clone().into());
+            ctx.insert("parent_id".into(), parent_id.unwrap_or(0).into());
+            ctx.insert("reply_to_id".into(), reply_to_id.unwrap_or(0).into());
             match Self::invoke_map(&script, &hook_fn_name(hook_id), ctx) {
                 Ok(m) => match map_string(&m, "action").as_deref() {
                     Some("block") => {

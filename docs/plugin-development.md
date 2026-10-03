@@ -162,15 +162,19 @@ inject = ["head", "body_end"]                             # 可选，默认 []
 
 #### `comment.before_create` —— 评论创建前
 
-- **触发时机**：公开端点 `POST /api/posts/:slug/comments`，在必填校验之后、写库之前。
+- **触发时机**：公开端点 `POST /api/posts/:slug/comments` 与留言板
+  `POST /api/pages/:slug/comments`（含**回复**，2026-10-03 嵌套评论新增），
+  在必填校验与父评论校验/两级归一化之后、写库之前。
 - **入参**：
 
   | 字段 | 类型 | 说明 |
   |---|---|---|
-  | `ctx.post_slug` | string | 目标文章 slug |
+  | `ctx.post_slug` | string | 目标文章 slug（留言板留言时为页面 slug） |
   | `ctx.author_name` | string | 昵称（已 trim，非空） |
   | `ctx.email` | string | 邮箱；**未填时为空字符串**（不会是 null） |
   | `ctx.content` | string | 评论内容（已 trim，非空） |
+  | `ctx.parent_id` | int | 所属顶级楼层 id（归一化后的最终存储值）；**顶级评论为 0**。只读 |
+  | `ctx.reply_to_id` | int | 被回复的中间楼层 id；**无（顶级评论/直接回复顶级）为 0**。只读 |
 
 - **返回值**：必须返回带 `action` 的 map：
   - `#{ action: "block", reason: "..." }` —— **拦截**。评论创建失败，客户端收到

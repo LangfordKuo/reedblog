@@ -1,13 +1,14 @@
 //! handler 共用的工具函数
 
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use rand::RngCore;
 use sqlx::AnyPool;
 use sqlx::Row;
 
 use crate::auth::require_auth;
-use crate::error::ApiResult;
-use crate::models::CategoryRef;
+use crate::error::{ApiError, ApiResult};
+use crate::models::{CategoryRef, CommentPub, CreateCommentRequest};
+use crate::plugins::CommentDecision;
 use crate::state::AppState;
 
 /// 同一连接上取自增 id（re-export，命名更明确）
@@ -463,6 +464,216 @@ pub async fn ensure_category_exists(pool: &AnyPool, category_id: i64) -> ApiResu
         ));
     }
     Ok(())
+}
+
+// ---------- 评论/回复共用管线（契约「评论回复」条款，2026-10-03 嵌套评论新增） ----------
+
+/// 父评论校验 + 两级归一化的结果
+#[derive(Debug, Default)]
+pub struct ParentResolution {
+    /// 顶级祖先（楼层）id；顶级评论为 None
+    pub parent_id: Option<i64>,
+    /// 被回复的中间楼层 id（仅「回复的回复」非 None）
+    pub reply_to_id: Option<i64>,
+    /// 被回复人作者名（响应冗余，与 reply_to_id 同生同灭）
+    pub reply_to_name: Option<String>,
+}
+
+/// 校验并归一化 parent_id（文章评论与留言板留言同一套机制）：
+/// - 父评论存在、与目标同 target（target_type + 目标 id 一致）、status=approved；
+///   违规 → 422 validation_error（带明确 message）
+/// - 两级归一化（Typecho/WP 风格）：父评论本身有 parent_id 时，新评论的 parent_id
+///   改写为其顶级祖先 id，被回复的中间楼层保留在 reply_to_id（存储上永远两级）
+///
+/// 向上走链只是对异常数据的防御（写入侧已保证两级），深度超 64 视为数据异常 → 422。
+pub async fn resolve_comment_parent(
+    pool: &AnyPool,
+    target_type: &str,
+    target_id: i64,
+    parent_id: Option<i64>,
+) -> ApiResult<ParentResolution> {
+    let Some(requested) = parent_id else {
+        return Ok(ParentResolution::default());
+    };
+    if requested <= 0 {
+        return Err(ApiError::validation("parent_id 非法"));
+    }
+    let row = sqlx::query(
+        "SELECT id, post_id, target_type, status, author_name, parent_id \
+         FROM comments WHERE id = ?",
+    )
+    .bind(requested)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| ApiError::validation("父评论不存在"))?;
+
+    let row_target = row
+        .try_get::<String, _>("target_type")
+        .unwrap_or_else(|_| "post".to_string());
+    if row_target != target_type || row.get::<i64, _>("post_id") != target_id {
+        return Err(ApiError::validation("不能回复其他目标下的评论"));
+    }
+    if row.get::<String, _>("status") != "approved" {
+        return Err(ApiError::validation("不能回复已隐藏的评论"));
+    }
+
+    let requested_author = row.get::<String, _>("author_name");
+    let mut top_id = row.get::<i64, _>("id");
+    let mut next = row.try_get::<Option<i64>, _>("parent_id").unwrap_or(None);
+    let mut reply_to: Option<(i64, String)> = None;
+    let mut depth = 0;
+    while let Some(pid) = next {
+        depth += 1;
+        if depth > 64 {
+            return Err(ApiError::validation("回复链过深（数据异常）"));
+        }
+        // 第一跳即被回复的中间楼层（其后若还有祖先属异常数据，只归一化不再记 reply_to）
+        if reply_to.is_none() {
+            reply_to = Some((top_id, requested_author.clone()));
+        }
+        top_id = pid;
+        next = sqlx::query("SELECT parent_id FROM comments WHERE id = ?")
+            .bind(pid)
+            .fetch_optional(pool)
+            .await?
+            .and_then(|r| r.try_get::<Option<i64>, _>("parent_id").unwrap_or(None));
+    }
+    Ok(ParentResolution {
+        parent_id: Some(top_id),
+        reply_to_id: reply_to.as_ref().map(|(id, _)| *id),
+        reply_to_name: reply_to.map(|(_, name)| name),
+    })
+}
+
+/// POST 评论共用创建管线（文章 `/api/posts/:slug/comments` 与留言板
+/// `/api/pages/:slug/comments` 两处调用，行为完全一致）：
+/// 必填校验 → 父评论校验与两级归一化（422 先于钩子）→ comment.before_create 钩子链
+/// （block → 403 comment_blocked；ctx 带归一化后的 parent_id/reply_to_id）→
+/// 插入（先发后审：创建即 approved）→ 返回 CommentPub。
+pub async fn create_comment_pipeline(
+    state: &AppState,
+    pool: &AnyPool,
+    db_type: &str,
+    target_type: &str,
+    target_id: i64,
+    slug: &str,
+    req: CreateCommentRequest,
+    blocked_default_reason: &str,
+) -> ApiResult<CommentPub> {
+    let author_name = req.author_name.trim();
+    let content = req.content.trim();
+    if author_name.is_empty() {
+        return Err(ApiError::validation("author_name 不能为空"));
+    }
+    if content.is_empty() {
+        return Err(ApiError::validation("content 不能为空"));
+    }
+    let email = req
+        .email
+        .map(|e| e.trim().to_string())
+        .filter(|e| !e.is_empty());
+
+    let parent = resolve_comment_parent(pool, target_type, target_id, req.parent_id).await?;
+
+    let (author_name, email, content) = match state
+        .plugins()
+        .run_comment_before_create(
+            slug,
+            author_name,
+            email.as_deref(),
+            content,
+            parent.parent_id,
+            parent.reply_to_id,
+        )
+        .await
+    {
+        CommentDecision::Block { reason } => {
+            let message = if reason.trim().is_empty() {
+                blocked_default_reason.to_string()
+            } else {
+                reason
+            };
+            return Err(ApiError::new(
+                StatusCode::FORBIDDEN,
+                "comment_blocked",
+                message,
+            ));
+        }
+        CommentDecision::Allow {
+            author_name,
+            email,
+            content,
+        } => (author_name, email, content),
+    };
+    // 插件改写后的字段仍需满足基本约束
+    let author_name = author_name.trim().to_string();
+    let content = content.trim().to_string();
+    if author_name.is_empty() {
+        return Err(ApiError::validation("author_name 不能为空"));
+    }
+    if content.is_empty() {
+        return Err(ApiError::validation("content 不能为空"));
+    }
+    let email = email
+        .map(|e| e.trim().to_string())
+        .filter(|e| !e.is_empty());
+
+    let created_at = crate::state::now_rfc3339();
+    let mut conn = pool.acquire().await?;
+    sqlx::query(
+        "INSERT INTO comments (post_id, target_type, author_name, email, content, status, \
+         parent_id, reply_to_id, created_at) \
+         VALUES (?, ?, ?, ?, ?, 'approved', ?, ?, ?)",
+    )
+    .bind(target_id)
+    .bind(target_type)
+    .bind(&author_name)
+    .bind(email.as_deref())
+    .bind(&content)
+    .bind(parent.parent_id)
+    .bind(parent.reply_to_id)
+    .bind(&created_at)
+    .execute(&mut *conn)
+    .await?;
+    let id = last_insert_id_on(&mut conn, db_type).await?;
+
+    Ok(CommentPub {
+        id,
+        author_name,
+        content,
+        created_at,
+        parent_id: parent.parent_id,
+        reply_to_id: parent.reply_to_id,
+        reply_to_name: parent.reply_to_name,
+    })
+}
+
+/// 公开评论列表 SELECT 列（文章/留言板共用）：rt 为 reply_to 的自 JOIN 别名
+pub const PUBLIC_COMMENT_COLUMNS: &str = "c.id, c.author_name, c.content, c.created_at, \
+     c.parent_id, c.reply_to_id, rt.author_name AS reply_to_name";
+
+/// 公开评论列表 FROM 片段：LEFT JOIN 自身取被回复人作者名（reply_to_id 为 NULL 时同为 NULL）
+pub const PUBLIC_COMMENT_FROM: &str =
+    "FROM comments c LEFT JOIN comments rt ON rt.id = c.reply_to_id";
+
+/// 隐藏线程过滤（契约「评论回复」条款）：parent_id 指向非 approved 评论的子回复
+/// 一并排除（父恢复 approved 后线程整体重新可见；子回复自身 status 不连带变更）
+pub const PUBLIC_COMMENT_THREAD_FILTER: &str = "(c.parent_id IS NULL OR EXISTS \
+     (SELECT 1 FROM comments tp WHERE tp.id = c.parent_id AND tp.status = 'approved'))";
+
+/// 公开评论列表行 → CommentPub（列集须含 PUBLIC_COMMENT_COLUMNS）
+pub fn row_to_comment_pub(r: &sqlx::any::AnyRow) -> CommentPub {
+    CommentPub {
+        id: r.get::<i64, _>("id"),
+        author_name: r.get::<String, _>("author_name"),
+        content: r.get::<String, _>("content"),
+        created_at: r.get::<String, _>("created_at"),
+        parent_id: r.try_get::<Option<i64>, _>("parent_id").unwrap_or(None),
+        reply_to_id: r.try_get::<Option<i64>, _>("reply_to_id").unwrap_or(None),
+        reply_to_name: r
+            .try_get::<Option<String>, _>("reply_to_name")
+            .unwrap_or(None),
+    }
 }
 
 #[cfg(test)]

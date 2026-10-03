@@ -92,6 +92,12 @@ export interface CommentPub {
   author_name: string
   content: string
   created_at: string
+  /** 所属顶级楼层 id（契约「评论回复」条款）；顶级评论本身为 null */
+  parent_id: number | null
+  /** 被回复的中间楼层 id（仅「回复的回复」非 null；两级归一化后存储） */
+  reply_to_id: number | null
+  /** 被回复人作者名（reply_to_id 为 null 时同为 null） */
+  reply_to_name: string | null
 }
 
 export type CommentStatus = "approved" | "hidden"
@@ -111,6 +117,14 @@ export interface CommentAdmin {
   status: CommentStatus
   created_at: string
   target_type: CommentTargetType
+  /** 所属顶级楼层 id；顶级评论本身为 null（契约「评论回复」条款） */
+  parent_id: number | null
+  /** 被回复的中间楼层 id（仅「回复的回复」非 null） */
+  reply_to_id: number | null
+  /** 被回复人作者名 */
+  reply_to_name: string | null
+  /** 直接子回复条数（两级存储下即整线程楼层数；子回复恒 0）——删除连带提示用 */
+  reply_count: number
 }
 
 // —— 页面（契约「页面」条款，2026-10-03 新增）——

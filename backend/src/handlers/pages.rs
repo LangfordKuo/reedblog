@@ -15,10 +15,12 @@ use crate::models::{CommentPub, CreateCommentRequest, PageDetail, PageSummary};
 use crate::pages::{
     fetch_page_links, row_to_page_summary, KIND_LINKS, KIND_MESSAGE_BOARD, PAGE_COLUMNS,
 };
-use crate::plugins::CommentDecision;
-use crate::state::{now_rfc3339, require_pool, AppState};
+use crate::state::{require_pool, AppState};
 
-use super::helpers::{last_insert_id_on, render_markdown};
+use super::helpers::{
+    create_comment_pipeline, render_markdown, row_to_comment_pub, PUBLIC_COMMENT_COLUMNS,
+    PUBLIC_COMMENT_FROM, PUBLIC_COMMENT_THREAD_FILTER,
+};
 
 /// GET /api/pages → [PageSummary]（仅 enabled，sort_order ASC, id ASC）
 pub async fn list_pages(State(state): State<AppState>) -> ApiResult<Json<Vec<PageSummary>>> {
@@ -93,37 +95,31 @@ async fn find_message_board_page(pool: &AnyPool, slug: &str) -> ApiResult<i64> {
     Ok(row.ok_or_else(ApiError::not_found)?.get::<i64, _>("id"))
 }
 
-/// GET /api/pages/:slug/comments → [CommentPub]（仅 approved，时间 ASC）
+/// GET /api/pages/:slug/comments → [CommentPub]（仅 approved 且线程可见，时间 ASC, id ASC）
+///
+/// 与文章评论同款形状与线程规则（契约「评论回复」条款）：平铺数组带
+/// parent_id/reply_to_id/reply_to_name，hidden 顶级留言的整条线程不出现。
 pub async fn list_page_comments(
     State(state): State<AppState>,
     Path(slug): Path<String>,
 ) -> ApiResult<Json<Vec<CommentPub>>> {
     let (pool, _db_type) = require_pool(&state).await?;
     let page_id = find_message_board_page(&pool, &slug).await?;
-    let rows = sqlx::query(
-        "SELECT id, author_name, content, created_at FROM comments \
-         WHERE target_type = 'page' AND post_id = ? AND status = 'approved' \
-         ORDER BY created_at ASC",
-    )
-    .bind(page_id)
-    .fetch_all(&pool)
-    .await?;
-    Ok(Json(
-        rows.iter()
-            .map(|r| CommentPub {
-                id: r.get::<i64, _>("id"),
-                author_name: r.get::<String, _>("author_name"),
-                content: r.get::<String, _>("content"),
-                created_at: r.get::<String, _>("created_at"),
-            })
-            .collect(),
-    ))
+    let sql = format!(
+        "SELECT {PUBLIC_COMMENT_COLUMNS} {PUBLIC_COMMENT_FROM} \
+         WHERE c.target_type = 'page' AND c.post_id = ? AND c.status = 'approved' \
+         AND {PUBLIC_COMMENT_THREAD_FILTER} \
+         ORDER BY c.created_at ASC, c.id ASC"
+    );
+    let rows = sqlx::query(&sql).bind(page_id).fetch_all(&pool).await?;
+    Ok(Json(rows.iter().map(row_to_comment_pub).collect()))
 }
 
 /// POST /api/pages/:slug/comments → 201 CommentPub（先发后审：创建即 approved）
 ///
-/// 与文章评论同一条管线：必填校验 → comment.before_create 钩子链（block → 403
-/// comment_blocked；ctx.post_slug = 页面 slug）→ 插入 target_type='page' 的评论行。
+/// 与文章评论同一条创建管线（helpers::create_comment_pipeline）：必填校验 →
+/// 父留言校验与两级归一化（body 可选 parent_id）→ comment.before_create 钩子链
+/// （block → 403 comment_blocked；ctx.post_slug = 页面 slug）→ 插入 target_type='page' 的评论行。
 pub async fn create_page_comment(
     State(state): State<AppState>,
     Path(slug): Path<String>,
@@ -132,73 +128,16 @@ pub async fn create_page_comment(
     let Json(req) = body.map_err(ApiError::from)?;
     let (pool, db_type) = require_pool(&state).await?;
     let page_id = find_message_board_page(&pool, &slug).await?;
-
-    let author_name = req.author_name.trim();
-    let content = req.content.trim();
-    if author_name.is_empty() {
-        return Err(ApiError::validation("author_name 不能为空"));
-    }
-    if content.is_empty() {
-        return Err(ApiError::validation("content 不能为空"));
-    }
-    let email = req
-        .email
-        .map(|e| e.trim().to_string())
-        .filter(|e| !e.is_empty());
-
-    let (author_name, email, content) = match state
-        .plugins()
-        .run_comment_before_create(&slug, author_name, email.as_deref(), content)
-        .await
-    {
-        CommentDecision::Block { reason } => {
-            let message = if reason.trim().is_empty() {
-                "留言被插件拦截".to_string()
-            } else {
-                reason
-            };
-            return Err(ApiError::new(
-                StatusCode::FORBIDDEN,
-                "comment_blocked",
-                message,
-            ));
-        }
-        CommentDecision::Allow {
-            author_name,
-            email,
-            content,
-        } => (author_name, email, content),
-    };
-    // 插件改写后的字段仍需满足基本约束
-    if author_name.trim().is_empty() {
-        return Err(ApiError::validation("author_name 不能为空"));
-    }
-    if content.trim().is_empty() {
-        return Err(ApiError::validation("content 不能为空"));
-    }
-
-    let created_at = now_rfc3339();
-    let mut conn = pool.acquire().await?;
-    sqlx::query(
-        "INSERT INTO comments (post_id, target_type, author_name, email, content, status, \
-         created_at) VALUES (?, 'page', ?, ?, ?, 'approved', ?)",
+    let created = create_comment_pipeline(
+        &state,
+        &pool,
+        &db_type,
+        "page",
+        page_id,
+        &slug,
+        req,
+        "留言被插件拦截",
     )
-    .bind(page_id)
-    .bind(author_name.trim())
-    .bind(email.as_deref().map(str::trim).filter(|e| !e.is_empty()))
-    .bind(content.trim())
-    .bind(&created_at)
-    .execute(&mut *conn)
     .await?;
-    let id = last_insert_id_on(&mut conn, &db_type).await?;
-
-    Ok((
-        StatusCode::CREATED,
-        Json(CommentPub {
-            id,
-            author_name: author_name.trim().to_string(),
-            content: content.trim().to_string(),
-            created_at,
-        }),
-    ))
+    Ok((StatusCode::CREATED, Json(created)))
 }

@@ -85,6 +85,12 @@ pub struct CommentPub {
     pub author_name: String,
     pub content: String,
     pub created_at: String,
+    /// 所属顶级楼层 id（契约「评论回复」条款）；顶级评论本身为 null
+    pub parent_id: Option<i64>,
+    /// 被回复的中间楼层 id（仅「回复的回复」非 null；两级归一化后存储）
+    pub reply_to_id: Option<i64>,
+    /// 被回复人作者名（JOIN 冗余；reply_to_id 为 null 时同为 null）
+    pub reply_to_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -102,6 +108,15 @@ pub struct CommentAdmin {
     pub created_at: String,
     /// 评论来源："post"（文章）| "page"（页面留言）
     pub target_type: String,
+    /// 所属顶级楼层 id（契约「评论回复」条款）；顶级评论本身为 null
+    pub parent_id: Option<i64>,
+    /// 被回复的中间楼层 id（仅「回复的回复」非 null）
+    pub reply_to_id: Option<i64>,
+    /// 被回复人作者名（JOIN 冗余）
+    pub reply_to_name: Option<String>,
+    /// 直接子回复条数（两级存储下即整线程楼层数；子回复恒 0）。
+    /// 供后台提示「删除将连带删除 N 条回复」
+    pub reply_count: i64,
 }
 
 // ---------- 页面（契约「页面」条款，2026-10-03 新增） ----------
@@ -282,6 +297,11 @@ pub struct CreateCommentRequest {
     #[serde(default)]
     pub email: Option<String>,
     pub content: String,
+    /// 回复的父评论 id（可选；契约「评论回复」条款）。
+    /// 校验：父存在、同目标（target_type+目标 id）、status=approved；
+    /// 父本身有 parent_id 时两级归一化：parent_id 改写为顶级祖先、被回复人进 reply_to_id
+    #[serde(default)]
+    pub parent_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

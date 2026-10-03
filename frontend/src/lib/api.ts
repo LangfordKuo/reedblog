@@ -173,19 +173,25 @@ export const api = {
   post: (slug: string) => request<PostDetail>("GET", `/posts/${encodeURIComponent(slug)}`),
   comments: (slug: string) =>
     request<CommentPub[]>("GET", `/posts/${encodeURIComponent(slug)}/comments`),
-  createComment: (slug: string, body: { author_name: string; email?: string; content: string }) =>
-    request<CommentPub>("POST", `/posts/${encodeURIComponent(slug)}/comments`, body),
+  // parent_id：回复的父评论 id（可选；后端做两级归一化，见契约「评论回复」）
+  createComment: (
+    slug: string,
+    body: { author_name: string; email?: string; content: string; parent_id?: number },
+  ) => request<CommentPub>("POST", `/posts/${encodeURIComponent(slug)}/comments`, body),
   tags: () => request<Tag[]>("GET", "/tags"),
   categories: () => request<Category[]>("GET", "/categories"),
   archive: () => request<ArchiveMonth[]>("GET", "/archive"),
   // 页面（公开；仅 enabled，sort_order ASC——同时是前台顶栏导航数据源）
   pages: () => request<PageSummary[]>("GET", "/pages"),
   page: (slug: string) => request<PageDetail>("GET", `/pages/${encodeURIComponent(slug)}`),
-  // 留言板留言（仅 kind=message_board 的启用页面；复用评论管线，先发后审）
+  // 留言板留言（仅 kind=message_board 的启用页面；复用评论管线，先发后审；
+  // parent_id 回复机制与文章评论完全一致，见契约「评论回复」）
   pageComments: (slug: string) =>
     request<CommentPub[]>("GET", `/pages/${encodeURIComponent(slug)}/comments`),
-  createPageComment: (slug: string, body: { author_name: string; email?: string; content: string }) =>
-    request<CommentPub>("POST", `/pages/${encodeURIComponent(slug)}/comments`, body),
+  createPageComment: (
+    slug: string,
+    body: { author_name: string; email?: string; content: string; parent_id?: number },
+  ) => request<CommentPub>("POST", `/pages/${encodeURIComponent(slug)}/comments`, body),
   // 全文搜索（已安装后公开；q 为空后端会 400，调用方保证非空）
   search: (q: SearchPostsQuery) => request<Page<SearchResult>>("GET", `/search${qs(q)}`),
 

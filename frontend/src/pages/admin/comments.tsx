@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react"
 import { Link, useSearchParams } from "react-router-dom"
-import { EyeIcon, EyeOffIcon, Loader2Icon, Trash2Icon } from "lucide-react"
+import { CornerDownRightIcon, EyeIcon, EyeOffIcon, Loader2Icon, Trash2Icon } from "lucide-react"
 import { toast } from "sonner"
 
 import { ConfirmDialog } from "@/components/confirm-dialog"
@@ -174,7 +174,23 @@ export default function AdminCommentsPage() {
                       )}
                     </TableCell>
                     <TableCell className="max-w-64 whitespace-normal">
-                      <p className="line-clamp-2 text-muted-foreground">{c.content}</p>
+                      {/* 回复关系（契约「评论回复」条款）：子回复缩进 + 「回复 @xxx」标记 */}
+                      <div className={c.parent_id !== null ? "border-l-2 pl-2" : undefined}>
+                        {c.parent_id !== null && (
+                          <div className="mb-0.5 flex items-center gap-1 text-xs text-muted-foreground">
+                            <CornerDownRightIcon className="size-3 shrink-0" />
+                            <span className="truncate">
+                              回复 {c.reply_to_name ? `@${c.reply_to_name}` : "楼层"}
+                            </span>
+                          </div>
+                        )}
+                        <p className="line-clamp-2 text-muted-foreground">{c.content}</p>
+                        {c.reply_count > 0 && (
+                          <div className="mt-0.5 text-xs text-muted-foreground">
+                            {c.reply_count} 条回复
+                          </div>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell className="text-muted-foreground">
                       {formatDateTime(c.created_at)}
@@ -240,7 +256,12 @@ export default function AdminCommentsPage() {
         open={deleting !== null}
         onOpenChange={(o) => !o && setDeleting(null)}
         title="删除评论"
-        description={`确定删除 ${deleting?.author_name ?? ""} 的这条评论吗？此操作不可撤销。`}
+        description={
+          // 连带删除提示（契约「评论回复」条款）：删顶级评论会连带删除其全部子回复
+          deleting && deleting.reply_count > 0
+            ? `确定删除 ${deleting.author_name} 的这条评论吗？将连带删除其 ${deleting.reply_count} 条回复。此操作不可撤销。`
+            : `确定删除 ${deleting?.author_name ?? ""} 的这条评论吗？此操作不可撤销。`
+        }
         loading={deleteLoading}
         onConfirm={handleDelete}
       />

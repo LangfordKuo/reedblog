@@ -1,5 +1,5 @@
-import { useEffect, useState, type FormEvent } from "react"
-import { Loader2Icon, SendIcon } from "lucide-react"
+import { useEffect, useMemo, useState, type FormEvent } from "react"
+import { CornerDownRightIcon, Loader2Icon, MessageSquareIcon, SendIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { BlockSpinner } from "@/components/spinner"
@@ -14,10 +14,39 @@ import type { CommentPub } from "@/lib/types"
 const AUTHOR_KEY = "reedblog_comment_author"
 const EMAIL_KEY = "reedblog_comment_email"
 
+/** 一个楼层：顶级评论 + 其下全部回复（契约「评论回复」：存储永远两级） */
+type Thread = { top: CommentPub; replies: CommentPub[] }
+
 /**
- * 评论/留言区：展示 + 发表表单。
+ * 平铺数组 → 两级树（契约「评论回复」条款）：
+ * 后端保证 parent_id 恒指顶级楼层 id，且列表按 created_at ASC, id ASC（父先于子）。
+ * 防御：parent 不在列表中的孤儿行按独立楼层展示（正常不发生）。
+ */
+function buildThreads(list: CommentPub[]): Thread[] {
+  const threads: Thread[] = []
+  const byTop = new Map<number, Thread>()
+  for (const c of list) {
+    if (c.parent_id === null) {
+      const t: Thread = { top: c, replies: [] }
+      threads.push(t)
+      byTop.set(c.id, t)
+    }
+  }
+  for (const c of list) {
+    if (c.parent_id === null) continue
+    const t = byTop.get(c.parent_id)
+    if (t) t.replies.push(c)
+    else threads.push({ top: c, replies: [] })
+  }
+  return threads
+}
+
+/**
+ * 评论/留言区：两级楼中楼展示 + 发表表单 + 内联回复表单。
  * target="post"（默认）挂文章评论接口；target="page" 挂留言板页接口
- * （契约「页面」条款：留言 = 挂在页面上的评论，同一条先发后审管线）。
+ * （契约「页面」「评论回复」条款：留言 = 挂在页面上的评论，同一套回复机制）。
+ *
+ * 昵称/邮箱状态提升到本组件：内联回复表单沿用主表单已填值（仅填内容）。
  */
 export function CommentSection({
   slug,
@@ -28,6 +57,10 @@ export function CommentSection({
 }) {
   const [comments, setComments] = useState<CommentPub[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [authorName, setAuthorName] = useState(() => localStorage.getItem(AUTHOR_KEY) ?? "")
+  const [email, setEmail] = useState(() => localStorage.getItem(EMAIL_KEY) ?? "")
+  // 当前展开内联回复表单的目标评论（一次只开一个）
+  const [replyTo, setReplyTo] = useState<CommentPub | null>(null)
   const noun = target === "page" ? "留言" : "评论"
 
   useEffect(() => {
@@ -47,8 +80,42 @@ export function CommentSection({
     }
   }, [slug, target])
 
+  const threads = useMemo(() => buildThreads(comments ?? []), [comments])
+
+  /**
+   * 提交评论/回复（主表单与内联回复表单共用）。
+   * parentId 传被点击评论的 id 即可——「回复的回复」由后端归一化到同一顶级楼层，
+   * 前端按 parent_id 分组后自动落回原楼层。成功返回 true（供回复表单关闭）。
+   */
+  const submitComment = async (content: string, parentId?: number): Promise<boolean> => {
+    const isReply = parentId !== undefined
+    if (!authorName.trim()) {
+      toast.error(isReply ? "请先在下方发表表单填写昵称" : "请填写昵称")
+      return false
+    }
+    try {
+      const create = target === "page" ? api.createPageComment : api.createComment
+      const created = await create(slug, {
+        author_name: authorName.trim(),
+        ...(email.trim() ? { email: email.trim() } : {}),
+        content: content.trim(),
+        ...(isReply ? { parent_id: parentId } : {}),
+      })
+      localStorage.setItem(AUTHOR_KEY, authorName.trim())
+      localStorage.setItem(EMAIL_KEY, email.trim())
+      setComments((prev) => [...(prev ?? []), created])
+      setReplyTo(null)
+      toast.success(isReply ? `回复发表成功` : `${noun}发表成功`)
+      return true
+    } catch (err) {
+      toast.error(errorMessage(err))
+      return false
+    }
+  }
+
   return (
     <section className="flex flex-col gap-6">
+      {/* 计数口径不变：线程内所有 visible 评论（平铺数组长度）都计数 */}
       <h2 className="text-lg font-semibold">
         {noun}
         {comments ? ` (${comments.length})` : ""}
@@ -63,77 +130,179 @@ export function CommentSection({
         </p>
       ) : (
         <ul className="flex flex-col gap-5">
-          {comments.map((c) => (
-            <li key={c.id} className="flex gap-3">
-              <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-secondary text-sm font-medium">
-                {c.author_name.slice(0, 1).toUpperCase()}
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
-                  <span className="font-medium">{c.author_name}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {formatRelative(c.created_at)}
-                  </span>
-                </div>
-                <p className="mt-1 whitespace-pre-wrap break-words text-sm text-foreground/90">
-                  {c.content}
-                </p>
-              </div>
+          {threads.map(({ top, replies }) => (
+            <li key={top.id} className="flex flex-col gap-4">
+              <CommentItem
+                c={top}
+                replyOpen={replyTo?.id === top.id}
+                onReply={() => setReplyTo(replyTo?.id === top.id ? null : top)}
+                onSubmit={submitComment}
+              />
+              {replies.length > 0 && (
+                <ul className="ml-4 flex flex-col gap-4 border-l pl-4 sm:ml-12">
+                  {replies.map((r) => (
+                    <li key={r.id}>
+                      <CommentItem
+                        c={r}
+                        replyOpen={replyTo?.id === r.id}
+                        onReply={() => setReplyTo(replyTo?.id === r.id ? null : r)}
+                        onSubmit={submitComment}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              )}
             </li>
           ))}
         </ul>
       )}
       <CommentForm
-        slug={slug}
-        target={target}
         noun={noun}
-        onCreated={(c) => setComments((prev) => [...(prev ?? []), c])}
+        authorName={authorName}
+        email={email}
+        onAuthorNameChange={setAuthorName}
+        onEmailChange={setEmail}
+        onSubmit={submitComment}
       />
     </section>
   )
 }
 
-function CommentForm({
-  slug,
-  target,
-  noun,
-  onCreated,
+/** 单条评论：头像/作者/时间/「回复 @xxx」标记/内容/回复按钮 + 内联回复表单 */
+function CommentItem({
+  c,
+  replyOpen,
+  onReply,
+  onSubmit,
 }: {
-  slug: string
-  target: "post" | "page"
-  noun: string
-  onCreated: (c: CommentPub) => void
+  c: CommentPub
+  replyOpen: boolean
+  onReply: () => void
+  onSubmit: (content: string, parentId?: number) => Promise<boolean>
 }) {
-  const [authorName, setAuthorName] = useState(() => localStorage.getItem(AUTHOR_KEY) ?? "")
-  const [email, setEmail] = useState(() => localStorage.getItem(EMAIL_KEY) ?? "")
+  return (
+    <div className="flex gap-3">
+      <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-secondary text-sm font-medium">
+        {c.author_name.slice(0, 1).toUpperCase()}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-baseline gap-x-2 text-sm">
+          <span className="font-medium">{c.author_name}</span>
+          {/* 被回复人标记（契约：reply_to_id 非空时 reply_to_name 为其作者名） */}
+          {c.reply_to_id !== null && c.reply_to_name && (
+            <span className="inline-flex items-center gap-0.5 text-xs text-muted-foreground">
+              <CornerDownRightIcon className="size-3" />
+              回复 <span className="font-medium text-foreground/80">@{c.reply_to_name}</span>
+            </span>
+          )}
+          <span className="text-xs text-muted-foreground">
+            {formatRelative(c.created_at)}
+          </span>
+        </div>
+        <p className="mt-1 whitespace-pre-wrap break-words text-sm text-foreground/90">
+          {c.content}
+        </p>
+        <button
+          type="button"
+          onClick={onReply}
+          className="mt-1 inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <MessageSquareIcon className="size-3" />
+          回复
+        </button>
+        {replyOpen && (
+          <ReplyForm
+            replyToName={c.author_name}
+            onSubmit={(content) => onSubmit(content, c.id)}
+            onCancel={onReply}
+          />
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** 内联回复小表单：昵称/邮箱沿用主表单已填值，仅填内容；提交带 parent_id（后端归一化） */
+function ReplyForm({
+  replyToName,
+  onSubmit,
+  onCancel,
+}: {
+  replyToName: string
+  onSubmit: (content: string) => Promise<boolean>
+  onCancel: () => void
+}) {
   const [content, setContent] = useState("")
   const [submitting, setSubmitting] = useState(false)
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
-    if (!authorName.trim()) {
-      toast.error("请填写昵称")
+    if (!content.trim()) {
+      toast.error("回复内容不能为空")
       return
     }
+    setSubmitting(true)
+    try {
+      await onSubmit(content)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <form
+      onSubmit={handleSubmit}
+      className="mt-2 flex flex-col gap-3 rounded-lg border bg-muted/30 p-3"
+    >
+      <Textarea
+        value={content}
+        onChange={(e) => setContent(e.target.value)}
+        placeholder={`回复 @${replyToName}…`}
+        className="min-h-20 bg-background"
+        maxLength={2000}
+        autoFocus
+      />
+      <div className="flex items-center gap-2">
+        <Button type="submit" size="sm" disabled={submitting}>
+          {submitting ? <Loader2Icon className="animate-spin" /> : <SendIcon />}
+          发表回复
+        </Button>
+        <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
+          取消
+        </Button>
+      </div>
+    </form>
+  )
+}
+
+/** 主表单：昵称/邮箱状态由 CommentSection 持有（内联回复表单沿用同一份值） */
+function CommentForm({
+  noun,
+  authorName,
+  email,
+  onAuthorNameChange,
+  onEmailChange,
+  onSubmit,
+}: {
+  noun: string
+  authorName: string
+  email: string
+  onAuthorNameChange: (v: string) => void
+  onEmailChange: (v: string) => void
+  onSubmit: (content: string) => Promise<boolean>
+}) {
+  const [content, setContent] = useState("")
+  const [submitting, setSubmitting] = useState(false)
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault()
     if (!content.trim()) {
       toast.error(`${noun}内容不能为空`)
       return
     }
     setSubmitting(true)
     try {
-      const create = target === "page" ? api.createPageComment : api.createComment
-      const created = await create(slug, {
-        author_name: authorName.trim(),
-        ...(email.trim() ? { email: email.trim() } : {}),
-        content: content.trim(),
-      })
-      localStorage.setItem(AUTHOR_KEY, authorName.trim())
-      localStorage.setItem(EMAIL_KEY, email.trim())
-      setContent("")
-      onCreated(created)
-      toast.success(`${noun}发表成功`)
-    } catch (err) {
-      toast.error(errorMessage(err))
+      if (await onSubmit(content)) setContent("")
     } finally {
       setSubmitting(false)
     }
@@ -151,7 +320,7 @@ function CommentForm({
           <Input
             id="comment-author"
             value={authorName}
-            onChange={(e) => setAuthorName(e.target.value)}
+            onChange={(e) => onAuthorNameChange(e.target.value)}
             placeholder="你的名字"
             maxLength={50}
           />
@@ -162,7 +331,7 @@ function CommentForm({
             id="comment-email"
             type="email"
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            onChange={(e) => onEmailChange(e.target.value)}
             placeholder="不会公开显示"
           />
         </div>

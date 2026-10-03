@@ -51,11 +51,18 @@ inject = ["head", "body_end"]
 |---|---|---|---|
 | `post.before_render` | `post_before_render(ctx)` | `ctx.title`, `ctx.content_md`, `ctx.slug` | 返回修改后的 map（同结构），用于改写待渲染内容；返回原样即不改 |
 | `post.after_render` | `post_after_render(ctx)` | `ctx.title`, `ctx.content_html`, `ctx.slug` | 返回修改后的 map，用于改写渲染后的 HTML（如追加版权声明） |
-| `comment.before_create` | `comment_before_create(ctx)` | `ctx.post_slug`, `ctx.author_name`, `ctx.email`, `ctx.content` | 返回 map：`{action:"allow"}` 放行 / `{action:"block", reason:"..."}` 拦截（评论创建失败，返回 403 `comment_blocked`，reason 进 message）/ 可修改字段后 `{action:"allow", author_name:.., content:..}` |
+| `comment.before_create` | `comment_before_create(ctx)` | `ctx.post_slug`, `ctx.author_name`, `ctx.email`, `ctx.content`, `ctx.parent_id`, `ctx.reply_to_id` | 返回 map：`{action:"allow"}` 放行 / `{action:"block", reason:"..."}` 拦截（评论创建失败，返回 403 `comment_blocked`，reason 进 message）/ 可修改字段后 `{action:"allow", author_name:.., content:..}` |
 | `post.after_publish` | `post_after_publish(ctx)` | `ctx.title`, `ctx.slug`, `ctx.published_at` | 返回值忽略（通知类钩子，如触发外部 webhook 由插件自行实现受限能力——第一版无网络能力，仅用于日志/内部状态） |
 
 - 多个启用的插件实现同一钩子：按插件 slug 字典序**依次串行**调用，前一个的输出 map 作为下一个的输入（链式）。
 - `comment.before_create` 链式时，任一插件返回 `block` 立即短路拦截。
+- `comment.before_create` 对**回复（楼中楼）同样生效**（2026-10-03 嵌套评论新增，见 api-contract.md「评论回复」）：
+  - `ctx.parent_id` / `ctx.reply_to_id` 为 INT，**0 表示无**；值是父评论校验与两级归一化
+    **之后**的最终存储值（parent_id=顶级楼层 id；reply_to_id=被回复的中间楼层 id，
+    直接回复顶级评论或发顶级评论时为 0）
+  - 这两个字段只读：钩子返回 map 中修改 parent_id/reply_to_id 不影响存储；
+    可改写字段仍为 author_name/email/content
+  - 顶级评论（非回复）创建时两者均为 0，老插件脚本不读取它们也不受影响
 - Rhai 脚本运行时错误/超时：记录日志，该插件该钩子**跳过**（不阻断主流程），并在插件详情 `last_error` 字段暴露。
 - 沙箱限制（后端强制）：`Engine::set_max_call_levels(64)`、`set_max_operations(50000)`、`set_max_string_size(1MB)`、`set_max_array_size`/`map_size` 合理上限；不注册任何文件/网络/进程 API。
 
