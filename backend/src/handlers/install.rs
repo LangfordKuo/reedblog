@@ -2,6 +2,7 @@
 //!
 //! POST /api/install 流程（契约顺序）：
 //! 验证连接 → 写入 config.toml → 建表（按 db_type 跑迁移）→ 创建管理员（argon2）
+//! → 注入示例分类/标签/文章/评论（仅安装流程一次；失败只记 warning，不影响安装）
 //! → 生成 JWT secret 存 config → 进程内切换到已安装状态（无需重启）。
 //!
 //! 「已安装」的判定 = config.toml 可完整加载（含非空 jwt_secret）。
@@ -157,6 +158,13 @@ pub async fn install(
         .execute(&mut probe)
         .await
         .map_err(|e| ApiError::internal(format!("创建管理员失败: {e}")))?;
+
+    // ---- 4.5 注入示例数据（契约「安装向导」条款：安装完成时自动注入示例分类/标签/文章/评论）----
+    // 只有这条安装路径会执行 seed（正常启动的 startup_state/connect_pool 绝不调用，
+    // 不依赖「表空就注入」判断）；失败不得阻断安装，只记 warning 日志。
+    if let Err(e) = crate::seed::seed_sample_data(&req.db_type, &mut probe).await {
+        eprintln!("[reedblog] warning: 示例数据注入失败（不影响安装完成）: {e}");
+    }
 
     // ---- 5. 建立正式连接池，进程内切换到已安装状态 ----
     drop(probe);

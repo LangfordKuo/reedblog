@@ -330,6 +330,7 @@ async fn install_login_publish_comment_flow() {
     assert_eq!(err_code(r).await, "validation_error");
 
     // 公开列表：仅 published、分页形状、列表不含 content_md
+    // （total = 2 篇测试文章 + 3 篇安装注入的示例文章）
     let v = c
         .get(format!("{base}/api/posts"))
         .send()
@@ -338,11 +339,11 @@ async fn install_login_publish_comment_flow() {
         .json::<Value>()
         .await
         .unwrap();
-    assert_eq!(v["total"], 2);
+    assert_eq!(v["total"], 5);
     assert_eq!(v["page"], 1);
     assert_eq!(v["per_page"], 10);
     let items = v["items"].as_array().unwrap();
-    assert_eq!(items.len(), 2);
+    assert_eq!(items.len(), 5);
     for it in items {
         assert!(it.get("content_md").is_none(), "公开列表不含 content_md");
         assert!(it.get("comment_count").is_some());
@@ -455,6 +456,7 @@ async fn install_login_publish_comment_flow() {
     assert_eq!(v["comment_count"], 2);
 
     // 管理端评论：列表（含 post_title/email）→ 隐藏 → 公开不可见 → 删除
+    // （total = 2 条测试评论 + 1 条安装注入的示例评论；created_at DESC，示例评论最旧排最后）
     let v = c
         .get(format!("{base}/api/admin/comments"))
         .bearer_auth(&token)
@@ -464,7 +466,7 @@ async fn install_login_publish_comment_flow() {
         .json::<Value>()
         .await
         .unwrap();
-    assert_eq!(v["total"], 2);
+    assert_eq!(v["total"], 3);
     assert_eq!(v["items"][0]["post_title"], "Hello World");
 
     let r = c
@@ -699,6 +701,7 @@ async fn taxonomies_archive_and_admin_crud() {
     assert_eq!(v["items"][0]["tags"][0]["name"], "rust");
 
     // 公开分类/标签 post_count 只统计 published
+    // （列表按 name 排序且含安装注入的示例分类/标签，断言用按名查找而非固定下标）
     let v = c
         .get(format!("{base}/api/categories"))
         .send()
@@ -707,8 +710,16 @@ async fn taxonomies_archive_and_admin_crud() {
         .json::<Value>()
         .await
         .unwrap();
-    assert_eq!(v[0]["name"], "科技");
-    assert_eq!(v[0]["post_count"], 1);
+    let cats = v.as_array().unwrap();
+    let keji = cats
+        .iter()
+        .find(|x| x["name"] == "科技")
+        .expect("应有 科技 分类");
+    assert_eq!(keji["post_count"], 1);
+    assert!(
+        cats.iter().any(|x| x["name"] == "技术分享"),
+        "示例分类应在列"
+    );
     let v = c
         .get(format!("{base}/api/tags"))
         .send()
@@ -717,9 +728,14 @@ async fn taxonomies_archive_and_admin_crud() {
         .json::<Value>()
         .await
         .unwrap();
-    assert_eq!(v[0]["post_count"], 1);
+    let tags = v.as_array().unwrap();
+    let rust = tags
+        .iter()
+        .find(|x| x["name"] == "rust")
+        .expect("应有 rust 标签");
+    assert_eq!(rust["post_count"], 1);
 
-    // 归档：按年月
+    // 归档：按年月（3 个示例文章月份 + 测试文章的当前月，共 4 组；年月 DESC，当前月最前）
     let now = chrono::Utc::now();
     let v = c
         .get(format!("{base}/api/archive"))
@@ -730,7 +746,7 @@ async fn taxonomies_archive_and_admin_crud() {
         .await
         .unwrap();
     let arr = v.as_array().unwrap();
-    assert_eq!(arr.len(), 1);
+    assert_eq!(arr.len(), 4);
     let year = now.format("%Y").to_string().parse::<i64>().unwrap();
     let month = now.format("%m").to_string().parse::<i64>().unwrap();
     assert_eq!(arr[0]["year"], year);
@@ -810,6 +826,7 @@ async fn taxonomies_archive_and_admin_crud() {
     assert!(upd["published_at"].as_str().is_some());
 
     // 管理列表过滤：status=draft/published/all + 非法值
+    // （published/all 含 3 篇安装注入的示例文章：2 测试 + 3 示例 = 5）
     let v = c
         .get(format!("{base}/api/admin/posts?status=draft"))
         .bearer_auth(&token)
@@ -829,7 +846,7 @@ async fn taxonomies_archive_and_admin_crud() {
         .json::<Value>()
         .await
         .unwrap();
-    assert_eq!(v["total"], 2);
+    assert_eq!(v["total"], 5);
     let v = c
         .get(format!("{base}/api/admin/posts?status=all"))
         .bearer_auth(&token)
@@ -839,7 +856,7 @@ async fn taxonomies_archive_and_admin_crud() {
         .json::<Value>()
         .await
         .unwrap();
-    assert_eq!(v["total"], 2);
+    assert_eq!(v["total"], 5);
     let r = c
         .get(format!("{base}/api/admin/posts?status=bogus"))
         .bearer_auth(&token)
@@ -927,7 +944,8 @@ async fn taxonomies_archive_and_admin_crud() {
         .json::<Value>()
         .await
         .unwrap();
-    assert_eq!(v["total"], 1);
+    // 删掉 p1 后剩：1 篇测试发布的「Draft One 改题」+ 3 篇安装注入的示例文章
+    assert_eq!(v["total"], 4);
 }
 
 // ---------- 4. 重启恢复：同一 config.toml + SQLite 文件，新实例即已安装 ----------
@@ -988,7 +1006,8 @@ async fn startup_restores_installed_state() {
         .json::<Value>()
         .await
         .unwrap();
-    assert_eq!(v["total"], 1);
+    // 1 篇实例 1 发布的文章 + 3 篇安装注入的示例文章；重启恢复绝不重复注入
+    assert_eq!(v["total"], 4);
 
     // JWT secret 持久化：实例 1 签发的 token 在实例 2 依然有效
     let v = c
@@ -1010,4 +1029,245 @@ async fn startup_restores_installed_state() {
         .await
         .unwrap();
     assert_eq!(r.status(), 200);
+}
+
+// ---------- 5. 安装完成自动注入示例数据（契约「安装向导」条款） ----------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn install_seeds_sample_content() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg_path = tmp.path().join("config.toml");
+    let cfg_str = cfg_path.to_str().unwrap();
+    let base = spawn_server(cfg_str).await;
+    let c = reqwest::Client::new();
+
+    let r = c
+        .post(format!("{base}/api/install"))
+        .json(&install_body(tmp.path()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 201);
+
+    // 3 篇已发布示例文章，发布时间错开在三个不同月份（published_at DESC）
+    let v = c
+        .get(format!("{base}/api/posts"))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(v["total"], 3);
+    let items = v["items"].as_array().unwrap();
+    assert_eq!(items.len(), 3);
+    let months: std::collections::HashSet<String> = items
+        .iter()
+        .map(|i| i["published_at"].as_str().unwrap()[..7].to_string())
+        .collect();
+    assert_eq!(months.len(), 3, "示例文章发布时间应错开成不同月份");
+
+    let by_title = |t: &str| -> Value {
+        items
+            .iter()
+            .find(|i| i["title"] == t)
+            .unwrap_or_else(|| panic!("缺少示例文章: {t}"))
+            .clone()
+    };
+    let welcome = by_title("欢迎使用 reedblog");
+    let axum_post = by_title("用 Axum 和 SQLx 搭建轻量博客后端");
+    let essay = by_title("周末随笔：慢下来的时光");
+
+    // slug 生成规则与现有发文流程一致：ASCII slugify；纯中文标题回退 post-<id>
+    assert_eq!(welcome["slug"], "reedblog");
+    assert_eq!(axum_post["slug"], "axum-sqlx");
+    assert_eq!(
+        essay["slug"],
+        format!("post-{}", essay["id"].as_i64().unwrap())
+    );
+
+    // 每篇挂 1 个分类 + 2~3 个标签；excerpt 非空且 ≤200 字符
+    for it in items {
+        assert!(
+            it["category"]["name"].as_str().is_some(),
+            "示例文章应挂分类: {it}"
+        );
+        let n = it["tags"].as_array().unwrap().len();
+        assert!((2..=3).contains(&n), "示例文章应挂 2~3 个标签: {it}");
+        let excerpt = it["excerpt"].as_str().unwrap();
+        assert!(!excerpt.is_empty(), "示例文章 excerpt 不应为空: {it}");
+        assert!(excerpt.chars().count() <= 200, "{excerpt}");
+    }
+
+    // excerpt 留空的那篇 → 后端自动摘要（剥离 Markdown 的纯文本，无 markup 符号）
+    let essay_excerpt = essay["excerpt"].as_str().unwrap();
+    for sym in ['#', '*', '`', '>', '|', '[', ']'] {
+        assert!(
+            !essay_excerpt.contains(sym),
+            "自动摘要不应含 Markdown 符号 {sym}: {essay_excerpt}"
+        );
+    }
+    // 显式 excerpt 的那篇原样返回
+    assert!(welcome["excerpt"].as_str().unwrap().contains("示例文章"));
+
+    // 详情可读：content_md/content_html 正常渲染
+    let v = c
+        .get(format!("{base}/api/posts/axum-sqlx"))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert!(v["content_md"].as_str().unwrap().contains("## "));
+    assert!(v["content_html"].as_str().unwrap().contains("<h2"));
+    assert_eq!(v["comment_count"], 1);
+
+    // 示例分类齐全，post_count 与实际挂载一致（只统计 published）
+    let v = c
+        .get(format!("{base}/api/categories"))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    let cats = v.as_array().unwrap();
+    assert_eq!(cats.len(), 3);
+    for (name, count) in [("技术分享", 1), ("生活随笔", 1), ("默认分类", 1)] {
+        let cat = cats
+            .iter()
+            .find(|x| x["name"] == name)
+            .unwrap_or_else(|| panic!("缺少示例分类: {name}"));
+        assert_eq!(cat["post_count"], count, "{name}");
+    }
+
+    // 示例标签齐全，post_count 与实际挂载一致
+    let v = c
+        .get(format!("{base}/api/tags"))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    let tags = v.as_array().unwrap();
+    for (name, count) in [
+        ("Rust", 1),
+        ("前端", 1),
+        ("教程", 2),
+        ("随笔", 2),
+        ("生活", 1),
+    ] {
+        let tag = tags
+            .iter()
+            .find(|x| x["name"] == name)
+            .unwrap_or_else(|| panic!("缺少示例标签: {name}"));
+        assert_eq!(tag["post_count"], count, "{name}");
+    }
+
+    // 归档：三篇分布在三个不同年月，各 1 篇
+    let v = c
+        .get(format!("{base}/api/archive"))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    let arr = v.as_array().unwrap();
+    assert_eq!(arr.len(), 3);
+    for e in arr {
+        assert_eq!(e["count"], 1, "{e}");
+    }
+
+    // 示例访客评论公开可见（先发后审 → approved），CommentPub 形状不含 email/status
+    let v = c
+        .get(format!("{base}/api/posts/axum-sqlx/comments"))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    let arr = v.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert!(!arr[0]["author_name"].as_str().unwrap().is_empty());
+    assert!(!arr[0]["content"].as_str().unwrap().is_empty());
+    assert!(arr[0]["created_at"].as_str().unwrap().ends_with('Z'));
+    assert!(arr[0].get("email").is_none(), "CommentPub 不含 email");
+    assert!(arr[0].get("status").is_none(), "CommentPub 不含 status");
+
+    // 后台可管理：示例评论是 approved、挂在示例文章上；示例文章全部 published
+    let token = login(&c, &base).await;
+    let v = c
+        .get(format!("{base}/api/admin/comments?status=approved"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(v["total"], 1);
+    assert_eq!(
+        v["items"][0]["post_title"],
+        "用 Axum 和 SQLx 搭建轻量博客后端"
+    );
+    assert!(v["items"][0]["email"].as_str().unwrap().contains('@'));
+    let v = c
+        .get(format!("{base}/api/admin/posts?status=published"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(v["total"], 3);
+
+    // 正常启动路径绝不重复注入：模拟重启（startup_state 恢复），示例数据数量不变
+    let state2 = reedblog_backend::startup_state(cfg_str).await;
+    assert!(state2.is_installed().await);
+    let app2 = reedblog_backend::build_router(state2, vec!["http://localhost:5173".to_string()]);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base2 = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    tokio::spawn(async move {
+        axum::serve(listener, app2).await.unwrap();
+    });
+    let v = c
+        .get(format!("{base2}/api/posts"))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(v["total"], 3, "重启恢复不得重复注入示例文章");
+    let v = c
+        .get(format!("{base2}/api/categories"))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(
+        v.as_array().unwrap().len(),
+        3,
+        "重启恢复不得重复注入示例分类"
+    );
+    let v = c
+        .get(format!("{base2}/api/posts/axum-sqlx/comments"))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(
+        v.as_array().unwrap().len(),
+        1,
+        "重启恢复不得重复注入示例评论"
+    );
 }

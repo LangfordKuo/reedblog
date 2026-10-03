@@ -372,10 +372,10 @@ async fn feed_and_sitemap() {
     // pubDate 为 RFC 822（UTC 时区 +0000）
     assert!(xml.contains("<pubDate>"), "{xml}");
     assert!(xml.contains("+0000</pubDate>"), "{xml}");
-    // 草稿不出现；item 数 = published 数
+    // 草稿不出现；item 数 = published 数（2 篇测试文章 + 3 篇安装注入的示例文章）
     assert!(!xml.contains("秘密草稿"), "{xml}");
     assert!(!xml.contains("draft-x"), "{xml}");
-    assert_eq!(xml.matches("<item>").count(), 2, "{xml}");
+    assert_eq!(xml.matches("<item>").count(), 5, "{xml}");
 
     // 反代场景：X-Forwarded-Proto/Host 决定绝对 URL
     let r = c
@@ -471,7 +471,7 @@ async fn feed_limits_to_20_items() {
         .await
         .unwrap();
     assert_eq!(xml.matches("<item>").count(), 20, "feed 只输出最新 20 篇");
-    // sitemap 不受 20 篇限制：21 篇文章全部收录
+    // sitemap 不受 20 篇限制：21 篇测试文章 + 3 篇安装注入的示例文章全部收录
     let sm = c
         .get(format!("{base}/api/sitemap.xml"))
         .send()
@@ -480,7 +480,7 @@ async fn feed_limits_to_20_items() {
         .text()
         .await
         .unwrap();
-    assert_eq!(sm.matches("<url>").count(), 21 + 4, "{sm}"); // 21 文章 + 首页/tags/categories/archive
+    assert_eq!(sm.matches("<url>").count(), 24 + 4, "{sm}"); // 24 文章 + 首页/tags/categories/archive
 }
 
 // ---------- 4. [server] base_url 优先于请求头 ----------

@@ -8,6 +8,7 @@ pub mod middleware;
 pub mod models;
 pub mod packages;
 pub mod plugins;
+pub mod seed;
 pub mod state;
 pub mod themes;
 
