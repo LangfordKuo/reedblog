@@ -41,3 +41,11 @@ export function formatRelative(iso: string): string {
 export function pluralPosts(n: number): string {
   return `${n} 篇文章`
 }
+
+/** 字节数 → 人类可读大小（媒体库展示用） */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "-"
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}

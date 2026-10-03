@@ -9,6 +9,7 @@ import AdminCommentsPage from "@/pages/admin/comments"
 import DashboardPage from "@/pages/admin/dashboard"
 import AdminLayout from "@/pages/admin/layout"
 import AdminLoginPage from "@/pages/admin/login"
+import AdminMediaPage from "@/pages/admin/media"
 import AdminPageEditPage from "@/pages/admin/page-edit"
 import AdminPagesPage from "@/pages/admin/pages"
 import AdminPluginsPage from "@/pages/admin/plugins"
@@ -68,6 +69,7 @@ export default function App() {
               <Route path="categories" element={<AdminCategoriesPage />} />
               <Route path="tags" element={<AdminTagsPage />} />
               <Route path="comments" element={<AdminCommentsPage />} />
+              <Route path="media" element={<AdminMediaPage />} />
               <Route path="plugins" element={<AdminPluginsPage />} />
               <Route path="themes" element={<AdminThemesPage />} />
               {/* 当前激活主题的设置面板（仿 Typecho「外观 → 设置」） */}

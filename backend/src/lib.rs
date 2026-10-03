@@ -4,6 +4,7 @@ pub mod auth;
 pub mod config;
 pub mod error;
 pub mod handlers;
+pub mod media;
 pub mod middleware;
 pub mod models;
 pub mod packages;
@@ -29,8 +30,8 @@ use tower_http::cors::CorsLayer;
 use config::Config;
 use error::ApiError;
 use handlers::{
-    admin_comments, admin_pages, admin_plugins, admin_posts, admin_terms, admin_themes, feed,
-    frontend, install, public, site_auth, site_settings, uploads,
+    admin_comments, admin_media, admin_pages, admin_plugins, admin_posts, admin_terms,
+    admin_themes, feed, frontend, install, public, site_auth, site_settings, uploads,
 };
 // handlers::pages 与领域模块 crate::pages 同名，导入时加别名区分
 use handlers::pages as public_pages;
@@ -182,6 +183,12 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route(
             "/admin/uploads",
             post(uploads::admin_upload_image).layer(DefaultBodyLimit::max(uploads_body_limit)),
+        )
+        // 管理：媒体库（契约「媒体库」条款；列表惰性扫描历史文件，删除同时删磁盘文件）
+        .route("/admin/media", get(admin_media::admin_list_media))
+        .route(
+            "/admin/media/{id}",
+            axum::routing::delete(admin_media::admin_delete_media),
         )
         // 上传文件公开读取（已安装后无需鉴权；不进未安装门禁白名单）
         .route("/uploads/{*path}", get(uploads::serve_upload))

@@ -212,12 +212,28 @@ pub struct ArchiveEntry {
     pub count: i64,
 }
 
-/// POST /api/admin/uploads 响应（契约 UploadResult）；filename 仅回显原始文件名
+/// POST /api/admin/uploads 响应（契约 UploadResult）；filename 仅回显原始文件名；
+/// id 为对应 media 记录 id（契约「媒体库」条款，2026-10-04 新增）
 #[derive(Debug, Clone, Serialize)]
 pub struct UploadResult {
+    pub id: i64,
     pub url: String,
     pub size: u64,
     pub filename: String,
+}
+
+/// GET /api/admin/media 列表条目（契约 MediaItem，2026-10-04 新增）；
+/// width/height 为图片头解析结果，解析失败为 null
+#[derive(Debug, Clone, Serialize)]
+pub struct MediaItem {
+    pub id: i64,
+    pub url: String,
+    pub filename: String,
+    pub size: i64,
+    pub mime: String,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub created_at: String,
 }
 
 /// GET /api/site/settings 响应（契约 SiteSettingsPublic；不含 base_url 等敏感字段）
@@ -501,6 +517,15 @@ pub struct PostsQuery {
     /// （热门文章组件数据源；契约「浏览量与点赞」条款）；其他值 → 422 validation_error
     #[serde(default)]
     pub order: Option<String>,
+}
+
+/// GET /api/admin/media 查询参数（契约「媒体库」条款；分页口径同 normalize_paging）
+#[derive(Debug, Clone, Deserialize)]
+pub struct MediaQuery {
+    #[serde(default)]
+    pub page: Option<i64>,
+    #[serde(default)]
+    pub per_page: Option<i64>,
 }
 
 /// GET /api/search 查询参数；q 缺失或 trim 后为空 → 400 validation_error

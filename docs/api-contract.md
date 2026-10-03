@@ -52,7 +52,13 @@ PageDetail   = {id, title, slug, kind, content_html, sort_order, updated_at,
 PageAdmin    = {id, title, slug, kind, content_md, enabled: bool, sort_order,
                 built_in: bool, links: [PageLink], created_at, updated_at}
 AuthResult   = {token, username, expires_at}
-UploadResult = {url, size: <字节数>, filename: <原始文件名回显>}
+UploadResult = {id: int, url, size: <字节数>, filename: <原始文件名回显>}
+               // 2026-10-04 媒体库新增：id = 对应 media 记录 id（见「媒体库」）
+MediaItem    = {id: int, url, filename: <原始文件名；历史文件回退存储文件名>,
+                size: int, mime: <如 image/png>,
+                width: int|null, height: int|null,   // 宽高解析失败存 null
+                created_at}
+               // 2026-10-04 媒体库新增，见「媒体库」
 SiteSettingsPublic = {title, subtitle, description, icp_number, footer_text, per_page: int}
 SiteSettingsAdmin  = SiteSettingsPublic + {base_url}   // base_url 为敏感字段，公开接口不返回
 SiteStats      = {post_count: int, comment_count: int, installed_at: string,
@@ -571,6 +577,27 @@ docs/extensibility-contract.md「主题组件」与 docs/theme-development.md「
   - **内容哈希去重**：同 sha256 的文件已存在（任意年月目录）则直接返回已有 url，不重复落盘
   - `filename` 仅回显原始文件名（JSON 转义），未提供时回退生成的文件名
   - 请求体上限 = `max_size_mb` + 1MB multipart 开销余量（超出上限的文件仍报 422 `file_too_large`）
+  - **2026-10-04 媒体库新增**：响应新增 `id`（对应 media 记录 id），其余字段与行为不变；
+    落盘/命中哈希去重后写 media 记录（upsert，见「媒体库」）
+
+媒体库（2026-10-04 新增，全部需要 Bearer）：
+- 数据表 `media`：一条记录对应一个已上传图片文件。唯一性以 `url`（存储路径）为准
+  （URL 由 sha256 内容哈希决定，同内容必然同路径）——**重复上传同图不新增行**，
+  返回既有记录的 `id`。宽高按图片头尽力解析，解析失败存 NULL（不上报错误）
+- `GET /api/admin/media?page&per_page` → 分页 `[MediaItem]`（复用总则分页壳与
+  `normalize_paging` 口径），按 `created_at DESC, id DESC`（时间戳秒精度，id 兜底确定性）
+  - **历史文件兜底（惰性扫描）**：列表请求时扫描 `uploads/<yyyy>/<mm>/` 下尚无对应记录的
+    文件并补建记录——原始文件名用存储文件名、宽高尽力解析、created_at 取文件 mtime
+    （取不到用当前时间）；保证本次改动前上传的历史文件同样可见。
+    扫描失败（目录不可读等）只记日志，列表接口照常返回
+- `DELETE /api/admin/media/:id` → 204
+  - **同时删除磁盘文件**：先删文件、再删记录（避免先删记录后文件残留被惰性扫描复活）；
+    文件不存在视为已删除（幂等），仍删掉记录
+  - 路径处理与 `GET /api/uploads/*path` 同款：词法清洗（拒 `..`、`:` 等）+ canonicalize
+    双防穿越，**绝不删除 uploads 目录外的文件**；文件删除因权限等原因失败 → 500，记录保留
+  - id 不存在 → 404 `not_found`；未登录/token 无效 → 401 `unauthorized`
+  - **不做「被文章引用」硬拦截**（引用检查需 LIKE 全文、成本高）：删除仅在后台 UI 上提示
+    「该图片可能已被文章引用，删除后旧文章里的该图会 404」
 
 ## CORS
 - 后端允许来源：`http://localhost:5173`（可在 config.toml `[cors] allowed_origins` 配置，默认含此项）；允许方法 GET/POST/PUT/PATCH/DELETE/OPTIONS（PATCH 为 2026-10-03 页面 toggle 接口新增），允许头 Authorization/Content-Type

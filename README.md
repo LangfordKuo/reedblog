@@ -14,6 +14,7 @@ A lightweight blog system written in Rust, with plugin & theme extensibility.
 - 分类、标签、按月归档；文章列表分页
 - 评论：先发后审（创建即公开），后台可隐藏/恢复/删除
 - 图片上传：编辑器工具栏 / 粘贴 / 拖拽即传（PNG/JPEG/GIF/WebP，按 magic bytes 判定真实类型，SVG 拒绝，上限默认 10MB 可配），sha256 内容哈希去重，经 `/api/uploads/*` 静态托管（immutable 强缓存）
+- 媒体库：后台上传图片统一入 `media` 表（同内容不重复入库），网格浏览（缩略图/尺寸/大小/时间）、复制 URL、删除（连带删除磁盘文件；删除前提示旧文章引用会 404）；本次改动前的历史文件由列表惰性扫描兜底可见
 - RSS 订阅（`/api/feed.xml`，最新 20 篇）与 sitemap（`/api/sitemap.xml`）；站点绝对 URL 支持 `[server] base_url` 配置，为空时按反代头（X-Forwarded-Proto/Host）推导
 - 全文搜索：`GET /api/search` 用 LIKE 实现（SQLite/MySQL 双方言零迁移，词条空白切分 AND 语义、通配符转义、仅 published），前端 `/search` 页 URL 携带查询词可分享，命中词 `<mark>` 高亮并显示纯文本上下文 snippet
 - 前台暗色切换：light/dark/system 三态偏好（localStorage 持久化，默认跟随系统），`<head>` 内联脚本在首绘前应用防 FOUC，header sun/moon 一键直切
@@ -148,7 +149,7 @@ reedblog/
 │   │   ├── auth.rs / error.rs / middleware.rs / models.rs
 │   │   └── main.rs / lib.rs  # 入口与路由组装
 │   ├── migrations/           # sqlx 迁移（sqlite/ 与 mysql/ 各一份）
-│   └── tests/                # 集成测试（integration、extensibility、uploads_feed）
+│   └── tests/                # 集成测试（integration、extensibility、uploads_feed、media 等）
 ├── frontend/                 # React 前端（Vite + Tailwind CSS 4）
 │   └── src/
 │       ├── pages/            # 公开页面、/install 安装向导、/admin 后台

@@ -5,6 +5,7 @@ import {
   FilesIcon,
   FileTextIcon,
   FolderIcon,
+  ImageIcon,
   LayoutDashboardIcon,
   LogOutIcon,
   MenuIcon,
@@ -30,6 +31,7 @@ const navItems = [
   { to: "/admin/categories", label: "分类管理", icon: FolderIcon, end: false },
   { to: "/admin/tags", label: "标签管理", icon: TagsIcon, end: false },
   { to: "/admin/comments", label: "评论管理", icon: MessageSquareIcon, end: false },
+  { to: "/admin/media", label: "媒体库", icon: ImageIcon, end: false },
   { to: "/admin/plugins", label: "插件", icon: PuzzleIcon, end: false },
   // 主题与其设置面板为父子路径，均用精确匹配避免双重高亮
   { to: "/admin/themes", label: "主题", icon: PaletteIcon, end: true },

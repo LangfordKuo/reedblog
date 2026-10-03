@@ -238,11 +238,26 @@ export interface ArchiveMonth {
   count: number
 }
 
-// POST /api/admin/uploads 响应（filename 仅回显原始文件名）
+// POST /api/admin/uploads 响应（filename 仅回显原始文件名；id = media 记录 id）
 export interface UploadResult {
+  id: number
   url: string
   size: number
   filename: string
+}
+
+// GET /api/admin/media 列表条目（契约「媒体库」条款）
+export interface MediaItem {
+  id: number
+  url: string
+  /** 原始文件名；历史文件回退存储文件名 */
+  filename: string
+  size: number
+  mime: string
+  /** 图片头解析失败为 null */
+  width: number | null
+  height: number | null
+  created_at: string
 }
 
 // POST /api/install 请求体

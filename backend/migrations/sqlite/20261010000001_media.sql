@@ -1,0 +1,17 @@
+-- 媒体库（契约「媒体库」条款，2026-10-04 新增）：一条记录对应 uploads/ 下一个已上传图片文件。
+-- url（存储路径 /api/uploads/<yyyy>/<mm>/<file>）= 唯一键：URL 由内容 sha256 决定，
+-- 同图重复上传命中同一路径，不新增行（上传链路先查后插，并发撞唯一约束时兜底重查）。
+-- width/height 按图片头尽力解析，失败存 NULL。历史文件由列表接口惰性扫描补建记录。
+-- 时间戳沿用全库 RFC3339 UTC 文本约定（字典序即时间序）。
+
+CREATE TABLE IF NOT EXISTS media (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    url        TEXT NOT NULL,
+    filename   TEXT NOT NULL,
+    size       BIGINT NOT NULL,
+    mime       VARCHAR(64) NOT NULL,
+    width      BIGINT,
+    height     BIGINT,
+    created_at VARCHAR(40) NOT NULL,
+    UNIQUE (url)
+);

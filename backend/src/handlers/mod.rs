@@ -1,4 +1,5 @@
 pub mod admin_comments;
+pub mod admin_media;
 pub mod admin_pages;
 pub mod admin_plugins;
 pub mod admin_posts;

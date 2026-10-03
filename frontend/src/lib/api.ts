@@ -11,6 +11,7 @@ import type {
   InstallPayload,
   Items,
   LikeResult,
+  MediaItem,
   Page,
   PageAdmin,
   PageDetail,
@@ -276,6 +277,11 @@ export const api = {
       form.append("file", file)
       return requestForm<UploadResult>("POST", "/admin/uploads", form)
     },
+
+    // 媒体库（契约「媒体库」条款）：分页列表（含历史文件惰性扫描）/ 删除（连带删磁盘文件）
+    media: (q: { page?: number; per_page?: number } = {}) =>
+      request<Page<MediaItem>>("GET", `/admin/media${qs(q)}`),
+    deleteMedia: (id: number) => request<void>("DELETE", `/admin/media/${id}`),
 
     // 站点设置（管理端全字段，含 base_url）
     siteSettings: () => request<SiteSettingsAdmin>("GET", "/admin/site/settings"),
