@@ -225,7 +225,10 @@ export function TaxonomyAdmin({ kind }: { kind: "category" | "tag" }) {
         open={deleting !== null}
         onOpenChange={(o) => !o && setDeleting(null)}
         title={`删除${noun}`}
-        description={`确定删除「${deleting?.name}」吗？此操作不可撤销。`}
+        description={
+          // 目标为空（弹窗关闭/删除完成）时不渲染正文，避免把 undefined 拼进 DOM 文案
+          deleting ? `确定删除「${deleting.name}」吗？此操作不可撤销。` : ""
+        }
         loading={deleteLoading}
         onConfirm={handleDelete}
       />

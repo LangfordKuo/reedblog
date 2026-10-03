@@ -198,7 +198,12 @@ export default function AdminTrashPage() {
         open={purging !== null}
         onOpenChange={(o) => !o && setPurging(null)}
         title="彻底删除文章"
-        description={`确定彻底删除「${purging?.title}」吗？彻底删除不可恢复，该文章的评论与点赞也会一并删除。`}
+        description={
+          // 目标为空（弹窗关闭/删除完成）时不渲染正文，避免把 undefined 拼进 DOM 文案
+          purging
+            ? `确定彻底删除「${purging.title}」吗？彻底删除不可恢复，该文章的评论与点赞也会一并删除。`
+            : ""
+        }
         confirmText="彻底删除"
         loading={purgeLoading}
         onConfirm={handlePurge}

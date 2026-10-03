@@ -293,7 +293,12 @@ export default function AdminPostsPage() {
         open={deleting !== null}
         onOpenChange={(o) => !o && setDeleting(null)}
         title="移入回收站"
-        description={`确定将「${deleting?.title}」移入回收站吗？移入后前台不再显示，之后可在回收站恢复或彻底删除。`}
+        description={
+          // 目标为空（弹窗关闭/删除完成）时不渲染正文，避免把 undefined 拼进 DOM 文案
+          deleting
+            ? `确定将「${deleting.title}」移入回收站吗？移入后前台不再显示，之后可在回收站恢复或彻底删除。`
+            : ""
+        }
         confirmText="移入回收站"
         loading={deleteLoading}
         onConfirm={handleDelete}
