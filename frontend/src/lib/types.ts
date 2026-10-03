@@ -136,6 +136,21 @@ export interface PostAdmin {
   updated_at: string
 }
 
+/** 修订列表摘要（契约「文章修订历史」条款）：不含正文，只给正文字符数 */
+export interface PostRevisionSummary {
+  id: number
+  post_id: number
+  title: string
+  content_chars: number
+  created_at: string
+}
+
+/** 单条完整修订（含 content_md/excerpt，供与当前正文做行级差异对比） */
+export interface PostRevision extends PostRevisionSummary {
+  content_md: string
+  excerpt: string
+}
+
 export interface Category {
   id: number
   name: string

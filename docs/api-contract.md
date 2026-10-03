@@ -59,6 +59,11 @@ MediaItem    = {id: int, url, filename: <原始文件名；历史文件回退存
                 width: int|null, height: int|null,   // 宽高解析失败存 null
                 created_at}
                // 2026-10-04 媒体库新增，见「媒体库」
+PostRevisionSummary = {id, post_id, title, content_chars: int, created_at}
+               // 2026-10-04 文章修订历史新增：列表摘要**不含正文**（content_md/excerpt
+               // 都不返回），content_chars 为 content_md 的 Unicode 字符数，见「文章修订历史」
+PostRevision        = PostRevisionSummary + {content_md, excerpt}
+               // 单条完整修订（含正文，供前端差异对比）
 SiteSettingsPublic = {title, subtitle, description, icp_number, footer_text, per_page: int}
 SiteSettingsAdmin  = SiteSettingsPublic + {base_url}   // base_url 为敏感字段，公开接口不返回
 SiteStats      = {post_count: int, comment_count: int, installed_at: string,
@@ -531,6 +536,41 @@ docs/extensibility-contract.md「主题组件」与 docs/theme-development.md「
   **拉取失败或结果为空时整块不渲染**（静默降级，不报错不占位）；加载完成前不渲染；
   配色走现有主题 token，暗色模式正常，窄屏不溢出
 
+## 文章修订历史（2026-10-04 新增）
+
+- 数据表 `post_revisions`：`id, post_id, title, content_md, excerpt, created_at`
+  （时间戳沿用全库 RFC3339 UTC 文本约定；`post_id` 建索引）。形状见数据形状
+  `PostRevisionSummary`（列表摘要）/ `PostRevision`（单条完整）
+- **快照时机**（只记内容，**不受**定时发布/置顶等状态影响）：
+  - `POST /api/admin/posts` 创建成功 → 插入一条**初始修订**（保存后的 title/content_md/excerpt）
+  - `PUT /api/admin/posts/:id` 成功且 **title / content_md / excerpt 三者任一发生变化** →
+    插入一条**保存后内容**的快照。变化判定在 UPDATE 前用 handler 已读到的当前行比对
+    （归一化后的值：title/excerpt 已 trim），**不用 SQL 的 `!=` 技巧**
+  - 三者都未变化（如只改 status / category / tags）→ **不新增修订**；
+    `PATCH /api/admin/posts/:id/sticky` 等不涉及内容的操作 → **不产生修订**
+- **保留上限**：每篇文章最多保留 **20 条**修订（后端常量，不做配置项）。插入后在**同一事务**内
+  裁剪：同 post_id 下按 id 从新到旧保留 20 条，更旧的删除（id 自增，等价于时间序）
+- 更新文章与插图修订（含创建文章与初始修订）在**同一事务**里完成，避免更新成功但快照丢失
+- 管理接口（全部需要 Bearer；未登录/token 无效 → 401 `unauthorized`；文章不存在 → 404 `not_found`）：
+  - `GET /api/admin/posts/:id/revisions` → `[PostRevisionSummary]`，按 `created_at DESC, id DESC`
+    （时间戳秒精度，id 兜底确定性）；**摘要不含 content_md/excerpt**——避免把整篇历史正文拉回来
+  - `GET /api/admin/posts/:id/revisions/:rev_id` → `PostRevision`（**单条完整**，含
+    content_md/excerpt，供前端做差异对比）；rev_id 不存在或不属于该文章 → 404 `not_found`
+  - `POST /api/admin/posts/:id/revisions/:rev_id/restore` → 200 `PostAdmin`
+    - 把该修订的 title/content_md/excerpt 写回文章（**只改这三个字段 + updated_at**；
+      status/published_at/is_sticky/分类/标签都不动，不触发 post.after_publish 等通知钩子）
+    - **同时再插入一条新修订**（保存后内容 = 该修订内容，即回滚本身也留痕）并执行 20 条裁剪；
+      写回 + 插图修订在**同一事务**内完成
+    - 文章不存在 / 修订不存在或不属于该文章 → 404 `not_found`
+- `DELETE /api/admin/posts/:id` 连带删除该文章的全部修订（与既有点赞/评论/标签清理同风格）
+- 实现约束：SQLite/MySQL 共用一份 SQL（裁剪的 `DELETE` 子查询用派生表包一层，规避 MySQL
+  「不能在语句的子查询里直接读目标表」限制）；`content_chars` 由后端对 content_md 按
+  **Unicode 字符**计数（不依赖双方言 `LENGTH` 的字节/字符差异）
+- 前端渲染约定：编辑器工具栏「修订历史」按钮 → 对话框（左侧修订列表：本地时间 + 标题 +
+  正文字符数；右侧选中修订正文与**当前编辑中正文**的行级差异）。行级 diff 自研 LCS 实现、
+  **不引入新依赖**；「恢复此版本」需二次确认，提示「会覆盖当前内容，同时生成一条新修订」；
+  恢复成功后回填编辑器并刷新列表（历史里能看到新条目）。配色走现有主题 token，暗色模式正常
+
 ## 鉴权
 - `POST /api/auth/login` body `{username, password}` → 200 `AuthResult`；错误 → 401 `invalid_credentials`
 - `GET /api/auth/me`（Bearer）→ `{"username"}`；无效/过期 → 401 `unauthorized`
@@ -556,7 +596,11 @@ docs/extensibility-contract.md「主题组件」与 docs/theme-development.md「
 - `PATCH /api/admin/posts/:id/sticky`（2026-10-03 置顶新增）→ `PostAdmin`
   - body: `{is_sticky: bool}`（必填）；行内快捷置顶/取消置顶，不改其他字段
   - id 不存在 → 404 `not_found`；未登录/token 无效 → 401 `unauthorized`
-- `DELETE /api/admin/posts/:id` → 204
+- `GET /api/admin/posts/:id/revisions` → `[PostRevisionSummary]`（2026-10-04 修订历史新增）
+- `GET /api/admin/posts/:id/revisions/:rev_id` → `PostRevision`
+- `POST /api/admin/posts/:id/revisions/:rev_id/restore` → `PostAdmin`
+  （以上三条完整规则见「文章修订历史」）
+- `DELETE /api/admin/posts/:id` → 204（2026-10-04 修订历史新增：**连带删除该文章的全部修订**）
 
 分类/标签：
 - `GET /api/admin/categories` → `[Category]`；`POST` body `{name}` → 201；`PUT /:id`；`DELETE /:id` → 204（分类下有文章时 409 `in_use`）

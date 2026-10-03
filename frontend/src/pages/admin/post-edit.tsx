@@ -1,8 +1,16 @@
 import { useEffect, useState, type FormEvent } from "react"
 import { useNavigate, useParams } from "react-router-dom"
-import { ArrowLeftIcon, ExternalLinkIcon, Loader2Icon, PlusIcon, SaveIcon } from "lucide-react"
+import {
+  ArrowLeftIcon,
+  ExternalLinkIcon,
+  HistoryIcon,
+  Loader2Icon,
+  PlusIcon,
+  SaveIcon,
+} from "lucide-react"
 import { toast } from "sonner"
 
+import { RevisionHistoryDialog } from "@/components/admin/revision-history"
 import { MarkdownEditor } from "@/components/markdown-editor"
 import { BlockSpinner } from "@/components/spinner"
 import { Button } from "@/components/ui/button"
@@ -74,6 +82,8 @@ export default function AdminPostEditPage() {
   const [newTag, setNewTag] = useState("")
   const [creatingTag, setCreatingTag] = useState(false)
   const [saving, setSaving] = useState(false)
+  // 修订历史对话框（仅编辑模式；契约「文章修订历史」条款）
+  const [historyOpen, setHistoryOpen] = useState(false)
 
   // 加载分类/标签选项；编辑模式下加载文章
   useEffect(() => {
@@ -241,6 +251,12 @@ export default function AdminPostEditPage() {
                 <ExternalLinkIcon />
                 查看
               </a>
+            </Button>
+          )}
+          {isEdit && (
+            <Button variant="ghost" size="sm" onClick={() => setHistoryOpen(true)}>
+              <HistoryIcon />
+              修订历史
             </Button>
           )}
         </div>
@@ -446,6 +462,21 @@ export default function AdminPostEditPage() {
                 : "创建草稿"}
         </Button>
       </div>
+
+      {/* 修订历史（恢复后回填编辑器；差别对比的是当前编辑中的正文，未保存修改也参与） */}
+      {isEdit && (
+        <RevisionHistoryDialog
+          postId={Number(id)}
+          currentContent={content}
+          open={historyOpen}
+          onOpenChange={setHistoryOpen}
+          onRestored={(p) => {
+            setTitle(p.title)
+            setContent(p.content_md)
+            setExcerpt(p.excerpt ?? "")
+          }}
+        />
+      )}
     </div>
   )
 }

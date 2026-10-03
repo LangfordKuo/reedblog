@@ -91,6 +91,29 @@ pub struct PostAdmin {
     pub updated_at: String,
 }
 
+/// 修订列表摘要（契约「文章修订历史」条款，2026-10-04 新增）：
+/// **不含 content_md/excerpt**——列表不把整篇历史正文拉回来；
+/// content_chars 为 content_md 的 Unicode 字符数（后端计数，规避双方言 LENGTH 差异）
+#[derive(Debug, Clone, Serialize)]
+pub struct PostRevisionSummary {
+    pub id: i64,
+    pub post_id: i64,
+    pub title: String,
+    pub content_chars: i64,
+    pub created_at: String,
+}
+
+/// 单条完整修订（含 content_md，供前端做行级差异对比）
+#[derive(Debug, Clone, Serialize)]
+pub struct PostRevision {
+    pub id: i64,
+    pub post_id: i64,
+    pub title: String,
+    pub content_md: String,
+    pub excerpt: String,
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Category {
     pub id: i64,

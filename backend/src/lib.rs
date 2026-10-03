@@ -133,6 +133,19 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
             "/admin/posts/{id}/sticky",
             axum::routing::patch(admin_posts::admin_set_sticky),
         )
+        // 修订历史（契约「文章修订历史」条款）：列表摘要 / 单条完整 / 恢复
+        .route(
+            "/admin/posts/{id}/revisions",
+            get(admin_posts::admin_list_post_revisions),
+        )
+        .route(
+            "/admin/posts/{id}/revisions/{rev_id}",
+            get(admin_posts::admin_get_post_revision),
+        )
+        .route(
+            "/admin/posts/{id}/revisions/{rev_id}/restore",
+            post(admin_posts::admin_restore_post_revision),
+        )
         // 管理：分类/标签
         .route(
             "/admin/categories",

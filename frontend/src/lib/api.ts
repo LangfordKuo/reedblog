@@ -21,6 +21,8 @@ import type {
   PostAdmin,
   PostDetail,
   PostPublic,
+  PostRevision,
+  PostRevisionSummary,
   PostSaveBody,
   PostStatus,
   SearchResult,
@@ -246,6 +248,15 @@ export const api = {
     setPostSticky: (id: number, isSticky: boolean) =>
       request<PostAdmin>("PATCH", `/admin/posts/${id}/sticky`, { is_sticky: isSticky }),
     deletePost: (id: number) => request<void>("DELETE", `/admin/posts/${id}`),
+
+    // 修订历史（契约「文章修订历史」条款）：列表摘要不含正文；单条完整供差异对比；
+    // 恢复写回内容并生成一条新修订（返回 PostAdmin）
+    postRevisions: (id: number) =>
+      request<PostRevisionSummary[]>("GET", `/admin/posts/${id}/revisions`),
+    postRevision: (id: number, revId: number) =>
+      request<PostRevision>("GET", `/admin/posts/${id}/revisions/${revId}`),
+    restorePostRevision: (id: number, revId: number) =>
+      request<PostAdmin>("POST", `/admin/posts/${id}/revisions/${revId}/restore`),
 
     categories: () => request<Category[]>("GET", "/admin/categories"),
     createCategory: (name: string) => request<Category>("POST", "/admin/categories", { name }),

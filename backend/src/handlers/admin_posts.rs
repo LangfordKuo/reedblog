@@ -4,11 +4,14 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use sqlx::any::AnyRow;
-use sqlx::AnyPool;
+use sqlx::{AnyConnection, AnyPool};
 use sqlx::Row;
 
 use crate::error::{ApiError, ApiResult, ValidJson};
-use crate::models::{normalize_paging, AdminPostsQuery, Page, PostAdmin, PostBody, StickyBody};
+use crate::models::{
+    normalize_paging, AdminPostsQuery, Page, PostAdmin, PostBody, PostRevision,
+    PostRevisionSummary, StickyBody,
+};
 use crate::pages::row_bool;
 use crate::state::{now_rfc3339, require_pool, AppState};
 
@@ -58,6 +61,85 @@ async fn load_post_admin(pool: &AnyPool, id: i64) -> ApiResult<Option<PostAdmin>
         None => Ok(None),
         Some(r) => Ok(Some(row_to_post_admin(pool, &r).await?)),
     }
+}
+
+// ---------- 文章修订历史（契约「文章修订历史」条款，2026-10-04 新增） ----------
+
+/// 每篇文章最多保留的修订条数（契约写死的常量，不做配置项）
+const MAX_REVISIONS_PER_POST: i64 = 20;
+
+/// 文章存在性校验（契约「文章修订历史」：文章不存在 → 404）
+async fn ensure_post_exists(pool: &AnyPool, id: i64) -> ApiResult<()> {
+    let count: i64 = sqlx::query("SELECT COUNT(*) FROM posts WHERE id = ?")
+        .bind(id)
+        .fetch_one(pool)
+        .await?
+        .get(0);
+    if count == 0 {
+        return Err(ApiError::not_found());
+    }
+    Ok(())
+}
+
+/// 在调用方事务连接上插入一条修订，并裁剪到每篇 20 条上限。
+/// 插入与裁剪都随调用方事务提交/回滚（避免写文章成功但快照丢失）。
+async fn insert_revision(
+    conn: &mut AnyConnection,
+    post_id: i64,
+    title: &str,
+    content_md: &str,
+    excerpt: &str,
+    created_at: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO post_revisions (post_id, title, content_md, excerpt, created_at) \
+         VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(post_id)
+    .bind(title)
+    .bind(content_md)
+    .bind(excerpt)
+    .bind(created_at)
+    .execute(&mut *conn)
+    .await?;
+
+    // 裁剪：同 post_id 下按 id 从新到旧保留 20 条（id 自增，等价于时间序）。
+    // 子查询用派生表包一层是 MySQL 的要求（不能在语句的子查询里直接读目标表），
+    // SQLite 同样接受该写法；LIMIT 走绑定参数（双方言均可）。
+    sqlx::query(
+        "DELETE FROM post_revisions WHERE post_id = ? AND id NOT IN (\
+             SELECT id FROM (\
+                 SELECT id FROM post_revisions WHERE post_id = ? ORDER BY id DESC LIMIT ?\
+             ) AS keep_ids\
+         )",
+    )
+    .bind(post_id)
+    .bind(post_id)
+    .bind(MAX_REVISIONS_PER_POST)
+    .execute(&mut *conn)
+    .await?;
+
+    Ok(())
+}
+
+/// 读取单条修订（含完整正文）；不存在或不属于该文章 → None（调用方映射 404）
+async fn load_revision(pool: &AnyPool, post_id: i64, rev_id: i64) -> ApiResult<Option<PostRevision>> {
+    let row = sqlx::query(
+        "SELECT id, post_id, title, content_md, excerpt, created_at FROM post_revisions \
+         WHERE id = ? AND post_id = ?",
+    )
+    .bind(rev_id)
+    .bind(post_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| PostRevision {
+        id: r.get("id"),
+        post_id: r.get("post_id"),
+        title: r.get("title"),
+        content_md: r.get("content_md"),
+        excerpt: r.get("excerpt"),
+        created_at: r.get("created_at"),
+    }))
 }
 
 fn validate_status(s: &str) -> ApiResult<()> {
@@ -230,7 +312,9 @@ pub async fn admin_create_post(
     };
     let is_sticky = body.is_sticky.unwrap_or(false);
 
-    let mut conn = pool.acquire().await?;
+    // 文章插入 +（纯中文标题时）slug 回填 + 初始修订同一事务（契约「文章修订历史」：
+    // 创建即有 1 条初始修订；避免文章创建成功但修订丢失）
+    let mut tx = pool.begin().await?;
     let insert = sqlx::query(
         "INSERT INTO posts (title, slug, excerpt, content_md, status, category_id, \
          published_at, is_sticky, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -245,22 +329,23 @@ pub async fn admin_create_post(
     .bind(if is_sticky { 1i64 } else { 0i64 })
     .bind(&now)
     .bind(&now);
-    if let Err(e) = insert.execute(&mut *conn).await {
+    if let Err(e) = insert.execute(&mut *tx).await {
         if is_unique_violation(&e) {
             return Err(slug_conflict(&slug));
         }
         return Err(e.into());
     }
-    let id = last_insert_id_on(&mut conn, &db_type).await?;
+    let id = last_insert_id_on(&mut *tx, &db_type).await?;
     if need_backfill {
         slug = format!("post-{id}");
         sqlx::query("UPDATE posts SET slug = ? WHERE id = ?")
             .bind(&slug)
             .bind(id)
-            .execute(&mut *conn)
+            .execute(&mut *tx)
             .await?;
     }
-    drop(conn);
+    insert_revision(&mut *tx, id, &title, &content_md, &excerpt, &now).await?;
+    tx.commit().await?;
 
     if let Some(tag_ids) = &body.tag_ids {
         replace_post_tags(&pool, id, tag_ids).await?;
@@ -422,6 +507,15 @@ pub async fn admin_update_post(
         && (existing.status == "scheduled" || existing.published_at.is_none());
     let is_sticky = body.is_sticky.unwrap_or(existing.is_sticky);
 
+    // 内容变化判定（契约「文章修订历史」）：用 UPDATE 前已读到的当前行比对归一化后的
+    // title/content_md/excerpt（不用 SQL 的 != 技巧）；未变化（如只改 status/category/tags）
+    // 不新增修订，PATCH sticky 等操作根本不经过这里
+    let content_changed = title != existing.title
+        || content_md != existing.content_md
+        || excerpt != existing.excerpt;
+
+    // 更新与（内容变化时的）插图修订同一事务：避免更新成功但快照丢失
+    let mut tx = pool.begin().await?;
     let update = sqlx::query(
         "UPDATE posts SET title = ?, slug = ?, excerpt = ?, content_md = ?, status = ?, \
          category_id = ?, published_at = ?, is_sticky = ?, updated_at = ? WHERE id = ?",
@@ -436,12 +530,16 @@ pub async fn admin_update_post(
     .bind(if is_sticky { 1i64 } else { 0i64 })
     .bind(&now)
     .bind(id);
-    if let Err(e) = update.execute(&pool).await {
+    if let Err(e) = update.execute(&mut *tx).await {
         if is_unique_violation(&e) {
             return Err(slug_conflict(&slug));
         }
         return Err(e.into());
     }
+    if content_changed {
+        insert_revision(&mut *tx, id, &title, &content_md, &excerpt, &now).await?;
+    }
+    tx.commit().await?;
 
     if let Some(tag_ids) = &body.tag_ids {
         replace_post_tags(&pool, id, tag_ids).await?;
@@ -500,7 +598,7 @@ pub async fn admin_set_sticky(
     Ok(Json(post))
 }
 
-/// DELETE /api/admin/posts/:id → 204（连带清理标签关联、评论与点赞）
+/// DELETE /api/admin/posts/:id → 204（连带清理标签关联、评论、点赞与修订历史）
 pub async fn admin_delete_post(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -531,10 +629,102 @@ pub async fn admin_delete_post(
         .bind(id)
         .execute(&pool)
         .await?;
+    // 修订历史连带清理（契约「文章修订历史」：与点赞/评论清理同风格）
+    sqlx::query("DELETE FROM post_revisions WHERE post_id = ?")
+        .bind(id)
+        .execute(&pool)
+        .await?;
     sqlx::query("DELETE FROM posts WHERE id = ?")
         .bind(id)
         .execute(&pool)
         .await?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------- 修订历史管理接口（契约「文章修订历史」条款，2026-10-04 新增） ----------
+
+/// GET /api/admin/posts/:id/revisions → [PostRevisionSummary]
+/// 按 created_at DESC, id DESC（时间戳秒精度，id 兜底确定性）；摘要不含正文
+pub async fn admin_list_post_revisions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<Vec<PostRevisionSummary>>> {
+    check_auth(&state, &headers).await?;
+    let (pool, _db_type) = require_pool(&state).await?;
+    ensure_post_exists(&pool, id).await?;
+
+    let rows = sqlx::query(
+        "SELECT id, post_id, title, content_md, created_at FROM post_revisions \
+         WHERE post_id = ? ORDER BY created_at DESC, id DESC",
+    )
+    .bind(id)
+    .fetch_all(&pool)
+    .await?;
+
+    Ok(Json(
+        rows.iter()
+            .map(|r| PostRevisionSummary {
+                id: r.get("id"),
+                post_id: r.get("post_id"),
+                title: r.get("title"),
+                // 正文字符数按 Unicode 字符计（MySQL CHAR_LENGTH/SQLite LENGTH 口径不一，
+                // 放 Rust 侧统一）
+                content_chars: r.get::<String, _>("content_md").chars().count() as i64,
+                created_at: r.get("created_at"),
+            })
+            .collect(),
+    ))
+}
+
+/// GET /api/admin/posts/:id/revisions/:rev_id → PostRevision（单条完整，含 content_md）
+pub async fn admin_get_post_revision(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((id, rev_id)): Path<(i64, i64)>,
+) -> ApiResult<Json<PostRevision>> {
+    check_auth(&state, &headers).await?;
+    let (pool, _db_type) = require_pool(&state).await?;
+    ensure_post_exists(&pool, id).await?;
+    load_revision(&pool, id, rev_id)
+        .await?
+        .map(Json)
+        .ok_or_else(ApiError::not_found)
+}
+
+/// POST /api/admin/posts/:id/revisions/:rev_id/restore → PostAdmin
+/// 把该修订的 title/content_md/excerpt 写回文章，并再插入一条新修订（回滚本身也留痕）；
+/// 同一事务内完成；只动内容三字段 + updated_at，status/置顶/分类/标签/发布时间都不变
+pub async fn admin_restore_post_revision(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((id, rev_id)): Path<(i64, i64)>,
+) -> ApiResult<Json<PostAdmin>> {
+    check_auth(&state, &headers).await?;
+    let (pool, _db_type) = require_pool(&state).await?;
+    ensure_post_exists(&pool, id).await?;
+    let rev = load_revision(&pool, id, rev_id)
+        .await?
+        .ok_or_else(ApiError::not_found)?;
+
+    let now = now_rfc3339();
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        "UPDATE posts SET title = ?, content_md = ?, excerpt = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(&rev.title)
+    .bind(&rev.content_md)
+    .bind(&rev.excerpt)
+    .bind(&now)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    insert_revision(&mut *tx, id, &rev.title, &rev.content_md, &rev.excerpt, &now).await?;
+    tx.commit().await?;
+
+    let post = load_post_admin(&pool, id)
+        .await?
+        .ok_or_else(|| ApiError::internal("恢复修订后读取文章失败"))?;
+    Ok(Json(post))
 }
