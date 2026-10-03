@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react"
 import { Link, useSearchParams } from "react-router-dom"
-import { CalendarDaysIcon, FolderIcon, MessageSquareIcon } from "lucide-react"
+import { CalendarDaysIcon, FolderIcon, MessageSquareIcon, PinIcon } from "lucide-react"
 
 import { Pagination } from "@/components/pagination"
 import { BlockSpinner } from "@/components/spinner"
@@ -130,7 +130,14 @@ export function PostCard({ post, titleNode, excerptNode }: PostCardProps) {
   const excerpt = excerptNode ?? post.excerpt
   return (
     <article className="flex flex-col gap-2">
-      <h2 className="text-xl font-semibold tracking-tight">
+      <h2 className="flex flex-wrap items-center gap-2 text-xl font-semibold tracking-tight">
+        {/* 置顶徽章（契约「文章置顶与定时发布」条款：前台列表摘要卡对置顶文章显示） */}
+        {post.is_sticky && (
+          <Badge className="shrink-0 border-orange-200 bg-orange-50 text-xs font-medium text-orange-700">
+            <PinIcon />
+            置顶
+          </Badge>
+        )}
         <Link
           to={`/posts/${encodeURIComponent(post.slug)}`}
           className="underline-offset-4 hover:underline"

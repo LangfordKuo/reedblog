@@ -12,12 +12,13 @@ use crate::models::{
     normalize_paging, ArchiveEntry, Category, CategoryRef, CommentPub, CreateCommentRequest, Page,
     PostDetail, PostPublic, PostsQuery, SearchQuery, SearchResult, Tag,
 };
-use crate::state::{require_pool, AppState};
+use crate::pages::row_bool;
+use crate::state::{now_rfc3339, require_pool, AppState};
 
 use super::helpers::{
     create_comment_pipeline, derive_excerpt, escape_like, fetch_post_tags, make_snippet,
     md_to_plain_text, render_markdown, row_to_comment_pub, split_search_terms,
-    PUBLIC_COMMENT_COLUMNS, PUBLIC_COMMENT_FROM, PUBLIC_COMMENT_THREAD_FILTER,
+    PUBLIC_COMMENT_COLUMNS, PUBLIC_COMMENT_FROM, PUBLIC_COMMENT_THREAD_FILTER, VISIBLE_POST_SQL,
 };
 
 /// 把文章行（列表/详情共用列集）转成 PostPublic
@@ -51,6 +52,7 @@ async fn row_to_post_public(pool: &AnyPool, r: &AnyRow) -> ApiResult<PostPublic>
             .unwrap_or(None)
             .unwrap_or_default(),
         comment_count: r.get::<i64, _>("comment_count"),
+        is_sticky: row_bool(r, "is_sticky"),
     })
 }
 
@@ -58,8 +60,9 @@ async fn row_to_post_public(pool: &AnyPool, r: &AnyRow) -> ApiResult<PostPublic>
 // comment_count 口径与公开评论列表一致（契约「评论回复」条款）：只统计前台可见评论——
 // approved、target_type='post'（post_id 列复用为通用目标 id，须防页面留言串号）、
 // 且线程可见（hidden 顶级评论的子回复不计；线程内所有 visible 评论都计数）
+// is_sticky 为置顶标记（契约「文章置顶与定时发布」条款，2026-10-03 新增）
 const PUBLIC_POST_COLUMNS: &str = "p.id, p.title, p.slug, p.excerpt, p.content_md, p.category_id, \
-     c.name AS category_name, p.published_at, \
+     c.name AS category_name, p.published_at, p.is_sticky, \
      (SELECT COUNT(*) FROM comments m WHERE m.target_type = 'post' AND m.post_id = p.id \
       AND m.status = 'approved' \
       AND (m.parent_id IS NULL OR EXISTS (SELECT 1 FROM comments mp WHERE mp.id = m.parent_id \
@@ -89,8 +92,10 @@ pub async fn list_posts(
     let (pool, _db_type) = require_pool(&state).await?;
     let (page, per_page) = normalize_public_paging(&pool, &state, q.page, q.per_page).await?;
 
-    let mut where_sql = String::from("WHERE p.status = 'published'");
-    let mut params: Vec<String> = Vec::new();
+    // 公开可见性（契约「文章置顶与定时发布」条款）：published 恒可见，
+    // scheduled 到点可见——:now 必须是 where_sql 的第一个绑定参数
+    let mut where_sql = format!("WHERE {VISIBLE_POST_SQL}");
+    let mut params: Vec<String> = vec![now_rfc3339()];
 
     if let Some(tag) = q.tag.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         where_sql.push_str(
@@ -117,10 +122,12 @@ pub async fn list_posts(
         params.push(format!("{month:02}"));
     }
 
-    // 排序：recent（默认）按 published_at DESC；hot 按 comment_count DESC, published_at DESC
-    // （comment_count 为 PUBLIC_POST_COLUMNS 中的 SELECT 别名，SQLite/MySQL 均支持按别名排序）
+    // 排序：recent（默认）按 is_sticky DESC, published_at DESC（置顶在前，契约 2026-10-03
+    // 置顶条款；tag/category/year/month 过滤后的标签/分类/归档列表同此规则）；
+    // hot 按 comment_count DESC, published_at DESC（不受置顶影响；comment_count 为
+    // PUBLIC_POST_COLUMNS 中的 SELECT 别名，SQLite/MySQL 均支持按别名排序）
     let order_by = match q.order.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        None | Some("recent") => "p.published_at DESC",
+        None | Some("recent") => "p.is_sticky DESC, p.published_at DESC",
         Some("hot") => "comment_count DESC, p.published_at DESC",
         Some(other) => {
             return Err(ApiError::validation(format!(
@@ -189,8 +196,10 @@ pub async fn search_posts(
     }
     let (page, per_page) = normalize_public_paging(&pool, &state, q.page, q.per_page).await?;
 
-    let mut where_sql = String::from("WHERE p.status = 'published'");
-    let mut params: Vec<String> = Vec::new();
+    // 公开可见性（含到点的 scheduled）；:now 为第一个绑定参数。
+    // 排序保持 published_at DESC——搜索不受置顶影响（契约「文章置顶与定时发布」条款）
+    let mut where_sql = format!("WHERE {VISIBLE_POST_SQL}");
+    let mut params: Vec<String> = vec![now_rfc3339()];
     for term in &terms {
         where_sql.push_str(
             " AND (p.title LIKE ? ESCAPE '\\' OR p.excerpt LIKE ? ESCAPE '\\' \
@@ -244,7 +253,8 @@ pub async fn search_posts(
     }))
 }
 
-/// GET /api/posts/:slug → PostDetail；不存在/未发布 → 404 not_found
+/// GET /api/posts/:slug → PostDetail；不存在/未公开可见（草稿、未到点的 scheduled）
+/// → 404 not_found
 ///
 /// 渲染管线（扩展契约「后端钩子」）：
 /// post.before_render 链改写 content_md → Markdown 渲染 → post.after_render 链改写 content_html。
@@ -257,9 +267,13 @@ pub async fn get_post(
     let sql = format!(
         "SELECT {PUBLIC_POST_COLUMNS} FROM posts p \
          LEFT JOIN categories c ON c.id = p.category_id \
-         WHERE p.slug = ? AND p.status = 'published'"
+         WHERE p.slug = ? AND {VISIBLE_POST_SQL}"
     );
-    let row = sqlx::query(&sql).bind(&slug).fetch_optional(&pool).await?;
+    let row = sqlx::query(&sql)
+        .bind(&slug)
+        .bind(now_rfc3339())
+        .fetch_optional(&pool)
+        .await?;
     let row = row.ok_or_else(ApiError::not_found)?;
     let content_md = row.get::<String, _>("content_md");
     let post = row_to_post_public(&pool, &row).await?;
@@ -281,10 +295,13 @@ pub async fn get_post(
     }))
 }
 
-/// 找已发布文章的 id（评论接口共用）；不存在/未发布 → 404
+/// 找公开可见文章的 id（评论接口共用，即「评论目标可见性」）；
+/// 不存在/未公开可见（草稿、未到点的 scheduled）→ 404
 async fn find_published_post(pool: &AnyPool, slug: &str) -> ApiResult<i64> {
-    let row = sqlx::query("SELECT id FROM posts WHERE slug = ? AND status = 'published'")
+    let sql = format!("SELECT p.id FROM posts p WHERE p.slug = ? AND {VISIBLE_POST_SQL}");
+    let row = sqlx::query(&sql)
         .bind(slug)
+        .bind(now_rfc3339())
         .fetch_optional(pool)
         .await?;
     Ok(row.ok_or_else(ApiError::not_found)?.get::<i64, _>("id"))
@@ -337,17 +354,19 @@ pub async fn create_comment(
     Ok((StatusCode::CREATED, Json(created)))
 }
 
-/// GET /api/tags → [Tag]（post_count 只统计 published）
+/// GET /api/tags → [Tag]（post_count 只统计公开可见文章：published + 到点的 scheduled）
 pub async fn list_tags(State(state): State<AppState>) -> ApiResult<Json<Vec<Tag>>> {
     let (pool, _db_type) = require_pool(&state).await?;
-    let rows = sqlx::query(
+    let sql = format!(
         "SELECT t.id, t.name, COUNT(p.id) AS post_count FROM tags t \
          LEFT JOIN post_tags pt ON pt.tag_id = t.id \
-         LEFT JOIN posts p ON p.id = pt.post_id AND p.status = 'published' \
-         GROUP BY t.id, t.name ORDER BY t.name",
-    )
-    .fetch_all(&pool)
-    .await?;
+         LEFT JOIN posts p ON p.id = pt.post_id AND {VISIBLE_POST_SQL} \
+         GROUP BY t.id, t.name ORDER BY t.name"
+    );
+    let rows = sqlx::query(&sql)
+        .bind(now_rfc3339())
+        .fetch_all(&pool)
+        .await?;
     Ok(Json(
         rows.iter()
             .map(|r| Tag {
@@ -359,16 +378,18 @@ pub async fn list_tags(State(state): State<AppState>) -> ApiResult<Json<Vec<Tag>
     ))
 }
 
-/// GET /api/categories → [Category]（post_count 只统计 published）
+/// GET /api/categories → [Category]（post_count 只统计公开可见文章）
 pub async fn list_categories(State(state): State<AppState>) -> ApiResult<Json<Vec<Category>>> {
     let (pool, _db_type) = require_pool(&state).await?;
-    let rows = sqlx::query(
+    let sql = format!(
         "SELECT c.id, c.name, COUNT(p.id) AS post_count FROM categories c \
-         LEFT JOIN posts p ON p.category_id = c.id AND p.status = 'published' \
-         GROUP BY c.id, c.name ORDER BY c.name",
-    )
-    .fetch_all(&pool)
-    .await?;
+         LEFT JOIN posts p ON p.category_id = c.id AND {VISIBLE_POST_SQL} \
+         GROUP BY c.id, c.name ORDER BY c.name"
+    );
+    let rows = sqlx::query(&sql)
+        .bind(now_rfc3339())
+        .fetch_all(&pool)
+        .await?;
     Ok(Json(
         rows.iter()
             .map(|r| Category {
@@ -380,18 +401,21 @@ pub async fn list_categories(State(state): State<AppState>) -> ApiResult<Json<Ve
     ))
 }
 
-/// GET /api/archive → [{year, month, count}]，仅 published，按年月 DESC
+/// GET /api/archive → [{year, month, count}]，仅公开可见文章，按年月 DESC
+/// （scheduled 到点后按计划时间所在年月计入；排序不受置顶影响——归档本身即纯时间维度）
 pub async fn archive(State(state): State<AppState>) -> ApiResult<Json<Vec<ArchiveEntry>>> {
     let (pool, _db_type) = require_pool(&state).await?;
-    let rows = sqlx::query(
-        "SELECT SUBSTR(published_at, 1, 4) AS y, SUBSTR(published_at, 6, 2) AS m, \
-         COUNT(*) AS cnt FROM posts \
-         WHERE status = 'published' AND published_at IS NOT NULL \
-         GROUP BY SUBSTR(published_at, 1, 4), SUBSTR(published_at, 6, 2) \
-         ORDER BY SUBSTR(published_at, 1, 4) DESC, SUBSTR(published_at, 6, 2) DESC",
-    )
-    .fetch_all(&pool)
-    .await?;
+    let sql = format!(
+        "SELECT SUBSTR(p.published_at, 1, 4) AS y, SUBSTR(p.published_at, 6, 2) AS m, \
+         COUNT(*) AS cnt FROM posts p \
+         WHERE {VISIBLE_POST_SQL} AND p.published_at IS NOT NULL \
+         GROUP BY SUBSTR(p.published_at, 1, 4), SUBSTR(p.published_at, 6, 2) \
+         ORDER BY SUBSTR(p.published_at, 1, 4) DESC, SUBSTR(p.published_at, 6, 2) DESC"
+    );
+    let rows = sqlx::query(&sql)
+        .bind(now_rfc3339())
+        .fetch_all(&pool)
+        .await?;
     let mut items = Vec::new();
     for r in &rows {
         let y: i64 = r.get::<String, _>("y").parse().unwrap_or(0);

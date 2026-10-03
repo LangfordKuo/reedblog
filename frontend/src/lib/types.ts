@@ -46,6 +46,8 @@ export interface PostPublic {
   tags: NamedRef[]
   published_at: string
   comment_count: number
+  /** 是否置顶（契约「文章置顶与定时发布」条款）；列表卡显示「置顶」徽章 */
+  is_sticky: boolean
 }
 
 export interface PostDetail extends PostPublic {
@@ -58,7 +60,8 @@ export interface SearchResult extends PostPublic {
   snippet: string
 }
 
-export type PostStatus = "draft" | "published"
+/** scheduled=定时发布（契约「文章置顶与定时发布」条款；到点自动公开可见，无后台任务） */
+export type PostStatus = "draft" | "published" | "scheduled"
 
 export interface PostAdmin {
   id: number
@@ -70,7 +73,10 @@ export interface PostAdmin {
   category_id: number | null
   category_name: string | null
   tag_ids: number[]
+  /** status=scheduled 时即计划发布时间（RFC3339 UTC） */
   published_at: string | null
+  /** 是否置顶 */
+  is_sticky: boolean
   created_at: string
   updated_at: string
 }
@@ -247,6 +253,10 @@ export interface PostSaveBody {
   category_id?: number | null
   tag_ids?: number[]
   status: PostStatus
+  /** 置顶（可选；POST 缺省 false、PUT 缺省保持原值） */
+  is_sticky?: boolean
+  /** 计划发布时间（RFC3339 UTC）：仅 status=scheduled 时接受，须为未来时间 */
+  published_at?: string
 }
 
 // —— 扩展系统（插件/主题）—— 对应 docs/extensibility-contract.md

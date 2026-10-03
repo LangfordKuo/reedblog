@@ -1,12 +1,21 @@
 import { useCallback, useEffect, useState } from "react"
 import { Link, useNavigate, useSearchParams } from "react-router-dom"
-import { ExternalLinkIcon, PencilIcon, PlusIcon, Trash2Icon } from "lucide-react"
+import {
+  ExternalLinkIcon,
+  Loader2Icon,
+  PencilIcon,
+  PinIcon,
+  PinOffIcon,
+  PlusIcon,
+  Trash2Icon,
+} from "lucide-react"
 import { toast } from "sonner"
 
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { Pagination } from "@/components/pagination"
 import { PostStatusBadge } from "@/components/post-status-badge"
 import { BlockSpinner } from "@/components/spinner"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import {
@@ -37,6 +46,8 @@ export default function AdminPostsPage() {
   const [error, setError] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<PostAdmin | null>(null)
   const [deleteLoading, setDeleteLoading] = useState(false)
+  // 行内快捷置顶切换中的文章 id（防重复点击）
+  const [stickyBusy, setStickyBusy] = useState<number | null>(null)
 
   const load = useCallback(() => {
     setLoading(true)
@@ -59,6 +70,21 @@ export default function AdminPostsPage() {
       else next.set(k, v)
     }
     setSearchParams(next, { replace: true })
+  }
+
+  // 行内快捷置顶/取消置顶（PATCH /api/admin/posts/:id/sticky，契约「文章置顶与定时发布」）
+  const toggleSticky = async (post: PostAdmin) => {
+    if (stickyBusy !== null) return
+    setStickyBusy(post.id)
+    try {
+      await api.admin.setPostSticky(post.id, !post.is_sticky)
+      toast.success(post.is_sticky ? `已取消置顶「${post.title}」` : `已置顶「${post.title}」`)
+      load()
+    } catch (err) {
+      toast.error(errorMessage(err))
+    } finally {
+      setStickyBusy(null)
+    }
   }
 
   const handleDelete = async () => {
@@ -97,6 +123,7 @@ export default function AdminPostsPage() {
         <TabsList>
           <TabsTrigger value="all">全部</TabsTrigger>
           <TabsTrigger value="published">已发布</TabsTrigger>
+          <TabsTrigger value="scheduled">定时发布</TabsTrigger>
           <TabsTrigger value="draft">草稿</TabsTrigger>
         </TabsList>
       </Tabs>
@@ -134,18 +161,34 @@ export default function AdminPostsPage() {
                 {data?.items.map((post) => (
                   <TableRow key={post.id}>
                     <TableCell className="max-w-64">
-                      <Link
-                        to={`/admin/posts/${post.id}/edit`}
-                        className="block truncate font-medium underline-offset-4 hover:underline"
-                      >
-                        {post.title}
-                      </Link>
+                      <span className="flex items-center gap-1.5">
+                        {post.is_sticky && (
+                          <Badge
+                            variant="outline"
+                            className="shrink-0 gap-0.5 border-orange-200 bg-orange-50 text-xs font-normal text-orange-700"
+                          >
+                            <PinIcon className="size-3" />
+                            置顶
+                          </Badge>
+                        )}
+                        <Link
+                          to={`/admin/posts/${post.id}/edit`}
+                          className="truncate font-medium underline-offset-4 hover:underline"
+                        >
+                          {post.title}
+                        </Link>
+                      </span>
                       <span className="block truncate text-xs text-muted-foreground">
                         /{post.slug}
                       </span>
                     </TableCell>
                     <TableCell>
                       <PostStatusBadge status={post.status} />
+                      {post.status === "scheduled" && post.published_at && (
+                        <span className="mt-1 block text-xs whitespace-nowrap text-muted-foreground">
+                          计划：{formatDate(post.published_at)}
+                        </span>
+                      )}
                     </TableCell>
                     <TableCell className="text-muted-foreground">
                       {post.category_name ?? "—"}
@@ -162,6 +205,28 @@ export default function AdminPostsPage() {
                             </a>
                           </Button>
                         )}
+                        {/* 行内快捷置顶/取消置顶 */}
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={post.is_sticky ? "取消置顶" : "置顶"}
+                          title={post.is_sticky ? "取消置顶" : "置顶"}
+                          disabled={stickyBusy !== null}
+                          onClick={() => void toggleSticky(post)}
+                          className={
+                            post.is_sticky
+                              ? "text-orange-600 hover:text-orange-600"
+                              : undefined
+                          }
+                        >
+                          {stickyBusy === post.id ? (
+                            <Loader2Icon className="animate-spin" />
+                          ) : post.is_sticky ? (
+                            <PinOffIcon />
+                          ) : (
+                            <PinIcon />
+                          )}
+                        </Button>
                         <Button
                           variant="ghost"
                           size="icon"

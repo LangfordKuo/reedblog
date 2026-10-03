@@ -115,6 +115,11 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
                 .put(admin_posts::admin_update_post)
                 .delete(admin_posts::admin_delete_post),
         )
+        // 行内快捷置顶/取消置顶（契约「文章置顶与定时发布」条款）
+        .route(
+            "/admin/posts/{id}/sticky",
+            axum::routing::patch(admin_posts::admin_set_sticky),
+        )
         // 管理：分类/标签
         .route(
             "/admin/categories",

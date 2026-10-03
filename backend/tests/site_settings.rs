@@ -290,7 +290,18 @@ async fn update_settings_validation_errors() {
     let c = reqwest::Client::new();
     let token = setup_installed(&c, &base, tmp.path()).await;
 
+    // 正例对照：合法 body 应 200（保证后续 422 都源于字段问题而非鉴权/请求形状问题；
+    // 值与安装默认一致，不影响本测试末尾「校验失败不得改动已存设置」的断言）
     let valid = json!({"title": "测试博客", "per_page": 10});
+    let r = c
+        .put(format!("{base}/api/admin/site/settings"))
+        .header("Authorization", bearer(&token))
+        .json(&valid)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200, "合法 body 应更新成功");
+
     let bad_bodies = [
         json!({"title": "   ", "per_page": 10}), // 空标题
         json!({"title": "t", "per_page": 0}),    // per_page 下界

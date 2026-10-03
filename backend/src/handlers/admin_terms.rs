@@ -8,9 +8,9 @@ use sqlx::Row;
 
 use crate::error::{ApiError, ApiResult, ValidJson};
 use crate::models::{Category, NameBody, Tag};
-use crate::state::{require_pool, AppState};
+use crate::state::{now_rfc3339, require_pool, AppState};
 
-use super::helpers::{check_auth, is_unique_violation, last_insert_id_on};
+use super::helpers::{check_auth, is_unique_violation, last_insert_id_on, VISIBLE_POST_SQL};
 
 fn duplicate_name(name: &str) -> ApiError {
     ApiError::conflict("duplicate_name", format!("名称 '{name}' 已存在"))
@@ -18,20 +18,23 @@ fn duplicate_name(name: &str) -> ApiError {
 
 // ---------- 分类 ----------
 
-/// GET /api/admin/categories → [Category]（post_count 只统计 published）
+/// GET /api/admin/categories → [Category]（post_count 只统计公开可见文章，
+/// 口径与公开 /api/categories 一致，见契约「文章置顶与定时发布」）
 pub async fn admin_list_categories(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> ApiResult<Json<Vec<Category>>> {
     check_auth(&state, &headers).await?;
     let (pool, _db_type) = require_pool(&state).await?;
-    let rows = sqlx::query(
+    let sql = format!(
         "SELECT c.id, c.name, COUNT(p.id) AS post_count FROM categories c \
-         LEFT JOIN posts p ON p.category_id = c.id AND p.status = 'published' \
-         GROUP BY c.id, c.name ORDER BY c.name",
-    )
-    .fetch_all(&pool)
-    .await?;
+         LEFT JOIN posts p ON p.category_id = c.id AND {VISIBLE_POST_SQL} \
+         GROUP BY c.id, c.name ORDER BY c.name"
+    );
+    let rows = sqlx::query(&sql)
+        .bind(now_rfc3339())
+        .fetch_all(&pool)
+        .await?;
     Ok(Json(
         rows.iter()
             .map(|r| Category {
@@ -115,12 +118,14 @@ pub async fn admin_update_category(
         return Err(e.into());
     }
 
-    let post_count: i64 =
-        sqlx::query("SELECT COUNT(*) FROM posts WHERE category_id = ? AND status = 'published'")
-            .bind(id)
-            .fetch_one(&pool)
-            .await?
-            .get(0);
+    let count_sql =
+        format!("SELECT COUNT(*) FROM posts p WHERE p.category_id = ? AND {VISIBLE_POST_SQL}");
+    let post_count: i64 = sqlx::query(&count_sql)
+        .bind(id)
+        .bind(now_rfc3339())
+        .fetch_one(&pool)
+        .await?
+        .get(0);
     Ok(Json(Category {
         id,
         name,
@@ -164,21 +169,23 @@ pub async fn admin_delete_category(
 
 // ---------- 标签 ----------
 
-/// GET /api/admin/tags → [Tag]（post_count 只统计 published）
+/// GET /api/admin/tags → [Tag]（post_count 只统计公开可见文章，口径与公开 /api/tags 一致）
 pub async fn admin_list_tags(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> ApiResult<Json<Vec<Tag>>> {
     check_auth(&state, &headers).await?;
     let (pool, _db_type) = require_pool(&state).await?;
-    let rows = sqlx::query(
+    let sql = format!(
         "SELECT t.id, t.name, COUNT(p.id) AS post_count FROM tags t \
          LEFT JOIN post_tags pt ON pt.tag_id = t.id \
-         LEFT JOIN posts p ON p.id = pt.post_id AND p.status = 'published' \
-         GROUP BY t.id, t.name ORDER BY t.name",
-    )
-    .fetch_all(&pool)
-    .await?;
+         LEFT JOIN posts p ON p.id = pt.post_id AND {VISIBLE_POST_SQL} \
+         GROUP BY t.id, t.name ORDER BY t.name"
+    );
+    let rows = sqlx::query(&sql)
+        .bind(now_rfc3339())
+        .fetch_all(&pool)
+        .await?;
     Ok(Json(
         rows.iter()
             .map(|r| Tag {
@@ -262,14 +269,16 @@ pub async fn admin_update_tag(
         return Err(e.into());
     }
 
-    let post_count: i64 = sqlx::query(
+    let count_sql = format!(
         "SELECT COUNT(*) FROM post_tags pt JOIN posts p ON p.id = pt.post_id \
-         WHERE pt.tag_id = ? AND p.status = 'published'",
-    )
-    .bind(id)
-    .fetch_one(&pool)
-    .await?
-    .get(0);
+         WHERE pt.tag_id = ? AND {VISIBLE_POST_SQL}"
+    );
+    let post_count: i64 = sqlx::query(&count_sql)
+        .bind(id)
+        .bind(now_rfc3339())
+        .fetch_one(&pool)
+        .await?
+        .get(0);
     Ok(Json(Tag {
         id,
         name,

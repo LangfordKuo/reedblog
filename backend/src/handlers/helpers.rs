@@ -14,6 +14,14 @@ use crate::state::AppState;
 /// 同一连接上取自增 id（re-export，命名更明确）
 pub use crate::state::last_insert_id as last_insert_id_on;
 
+/// 文章公开可见性条件（契约「文章置顶与定时发布」条款，惰性定时发布）：
+/// published 恒可见；scheduled 到点（published_at <= :now）即可见。
+/// 占位符必须绑定 `state::now_rfc3339()` 产出的 RFC3339 UTC 字符串——全库时间戳
+/// 字典序即时间序，SQLite/MySQL 共用同一份 SQL；published_at 为 NULL 时比较结果
+/// 为 NULL，该行自然排除。表别名固定为 `p`（所有公开/计数查询统一用 posts p）。
+pub const VISIBLE_POST_SQL: &str =
+    "(p.status = 'published' OR (p.status = 'scheduled' AND p.published_at <= ?))";
+
 /// 管理接口统一鉴权：Bearer token 校验，失败 → 401 unauthorized
 pub async fn check_auth(state: &AppState, headers: &HeaderMap) -> ApiResult<()> {
     let rt = state.runtime().await;

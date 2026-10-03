@@ -14,12 +14,15 @@
 ```
 SiteInfo     = {title, subtitle, installed: bool}
 PostPublic   = {id, title, slug, excerpt, category: {id, name}|null,
-                tags: [{id, name}], published_at, comment_count}
+                tags: [{id, name}], published_at, comment_count,
+                is_sticky: bool}   // 2026-10-03 置顶新增，见「文章置顶与定时发布」
 PostDetail   = PostPublic + {content_md}
 SearchResult = PostPublic + {snippet}   // snippet 为纯文本上下文片段，见「全文搜索」
-PostAdmin    = {id, title, slug, content_md, excerpt, status: "draft"|"published",
+PostAdmin    = {id, title, slug, content_md, excerpt,
+                status: "draft"|"published"|"scheduled",  // scheduled 为 2026-10-03 定时发布新增
                 category_id|null, category_name|null, tag_ids: [int],
-                published_at|null, created_at, updated_at}
+                published_at|null,   // status=scheduled 时即计划发布时间（RFC3339 UTC）
+                is_sticky: bool, created_at, updated_at}
 Category     = {id, name, post_count}
 Tag          = {id, name, post_count}
 CommentPub   = {id, author_name, content, created_at,
@@ -70,26 +73,38 @@ WidgetAdmin    = WidgetConfig + {source: WidgetSource, enabled: bool, params: [T
 - 安装完成无需重启进程（进程内切换到已初始化状态即可；实现上允许重启，但接口行为必须一致）
 
 ## 站点公开接口（已安装后可用）
+
+**公开可见性（2026-10-03 定时发布新增，惰性发布方案）**：所有公开查询（文章列表/详情/标签/
+分类/归档/搜索/RSS/sitemap/评论目标可见性）中文章的可见条件统一为
+`(status='published' OR (status='scheduled' AND published_at <= :now))`——scheduled 文章
+到点自动可见，**无后台定时器、无需重启**；`:now` 由后端在每次请求时以 RFC3339 UTC 字符串
+传入（全库时间戳字典序即时间序，SQLite/MySQL 共用同一份 SQL）。计数类逻辑（分类/标签
+post_count、站点统计 SiteStats.post_count、归档计数）同口径。详见「文章置顶与定时发布」。
+
 - `GET /api/site` → `SiteInfo`（title/subtitle 与站点设置一致，见「站点设置」）
-- `GET /api/posts?page&per_page&tag=<name>&category=<name>&year=<int>&month=<int>&order=<recent|hot>` → 分页 `[PostPublic]`，仅 published；列表不含 content_md
-  - order（2026-10-03 组件系统新增）：`recent`（默认，缺省即此）按 published_at DESC；
-    `hot` 按 comment_count DESC, published_at DESC（热门文章组件数据源，零迁移：
-    comment_count 为既有 SELECT 别名，SQLite/MySQL 均支持按别名排序）；其他值 → 422 `validation_error`
+- `GET /api/posts?page&per_page&tag=<name>&category=<name>&year=<int>&month=<int>&order=<recent|hot>` → 分页 `[PostPublic]`，仅公开可见（见上）；列表不含 content_md
+  - order（2026-10-03 组件系统新增；2026-10-03 置顶调整）：`recent`（默认，缺省即此）按
+    **is_sticky DESC, published_at DESC**（置顶在前；tag/category/year/month 过滤后的
+    标签/分类/归档列表同此规则）；`hot` 按 comment_count DESC, published_at DESC
+    （热门文章组件数据源，零迁移：comment_count 为既有 SELECT 别名，SQLite/MySQL 均支持
+    按别名排序；**不受置顶影响**）；其他值 → 422 `validation_error`
 - excerpt 为空时的回退（2026-10-03 定）：由 content_md 生成**纯文本**摘要（剥离 Markdown 语法：标题#、强调符、代码围栏、表格线、链接保留文字），截断至 ≤200 字符；不得返回含 Markdown 符号的原文
-- `GET /api/posts/:slug` → `PostDetail`；不存在/未发布 → 404 `not_found`
+- `GET /api/posts/:slug` → `PostDetail`；不存在/未公开可见（草稿、未到点的 scheduled）→ 404 `not_found`
 - `GET /api/posts/:slug/comments` → `[CommentPub]`（仅 approved 且线程可见，按时间 ASC, id ASC；
   仍为平铺数组，两级树由前端按 parent_id 自行组装，见「评论回复」）
+  - 评论目标可见性同文章：文章未公开可见（含未到点的 scheduled）→ 404 `not_found`
 - `POST /api/posts/:slug/comments` → 201 `CommentPub`
   - body: `{author_name, email?, content, parent_id?}`；必填校验 422 `validation_error`
   - 默认先发后审：创建即 approved
   - 带 parent_id 时为回复（楼中楼）：校验与两级归一化见「评论回复」
-- `GET /api/tags` → `[Tag]`（post_count 只统计 published）
+- `GET /api/tags` → `[Tag]`（post_count 只统计公开可见文章，见「公开可见性」）
 - `GET /api/categories` → `[Category]`（同上）
-- `GET /api/archive` → `[{"year": int, "month": int, "count": int}]`，仅 published，按年月 DESC
+- `GET /api/archive` → `[{"year": int, "month": int, "count": int}]`，仅公开可见文章，按年月 DESC
+  （scheduled 文章到点后按计划时间所在年月计入）
 
 全文搜索（2026-10-03 新增）：
 - `GET /api/search?q=<关键词>&page&per_page` → 分页 `[SearchResult]`（复用总则分页壳），
-  仅 published，按 published_at DESC；分页参数与 `/api/posts` 相同
+  仅公开可见文章，按 published_at DESC（**不受置顶影响**）；分页参数与 `/api/posts` 相同
   - 分词：q 按空白切分为词条（上限 8 个，多余忽略），**每个词条都必须命中**（AND 语义）；
     匹配范围：title、excerpt、content_md 三列
   - 实现约束：LIKE（SQLite/MySQL 共用一份 SQL，零迁移；**禁止** FTS5、MATCH…AGAINST 等单方言语法）；
@@ -114,14 +129,16 @@ RSS 与 sitemap（2026-10-03 新增；base_url 来源 2026-10-03 更新为站点
      host 取 `X-Forwarded-Host` → `Host`（反代场景）
 - feed channel 的 title/description 读站点设置（title=站点名称；description=副标题，为空回退标题）
 - `GET /api/feed.xml` → RSS 2.0，Content-Type `application/rss+xml; charset=utf-8`
-  - 最新 20 篇 published 文章，按 published_at DESC
+  - 最新 20 篇公开可见文章（含到点的 scheduled），按 published_at DESC——
+    **保持纯时间序，不受置顶影响**（2026-10-03 置顶条款）
   - channel 含 title、link（站点绝对 URL）、description（来源见上）
   - item 含 title、link（`{base}/posts/{slug}`，与前端路由一致）、guid（isPermaLink=true，同 link）、
     pubDate（RFC 822）、description（excerpt，为空时按「excerpt 回退」条款从正文推导）
   - 所有文本 XML 转义（`& < > " '`）
 - `GET /api/sitemap.xml` → urlset（xmlns `http://www.sitemaps.org/schemas/sitemap/0.9`），
   Content-Type `application/xml; charset=utf-8`
-  - 含：首页 `{base}/`、全部 published 文章详情页（lastmod=updated_at，W3C datetime 即 RFC3339）、
+  - 含：首页 `{base}/`、全部公开可见文章详情页（含到点的 scheduled；lastmod=updated_at，
+    W3C datetime 即 RFC3339；**保持纯时间序，不受置顶影响**）、
     全部 **enabled 页面**（2026-10-03 页面功能新增：`{base}/pages/{slug}`，lastmod=updated_at，
     按 sort_order ASC 排在文章之后）、
     标签索引 `{base}/tags`、分类索引 `{base}/categories`、归档 `{base}/archive`
@@ -316,20 +333,84 @@ docs/extensibility-contract.md「主题组件」与 docs/theme-development.md「
     （仍 204）；删除子回复只删自身；id 不存在 → 404 `not_found`
   - 隐藏顶级评论（`PUT` status=hidden）不改子回复 status，仅前台整线程过滤
 
+## 文章置顶与定时发布（2026-10-03 新增）
+
+### 文章置顶（is_sticky）
+- 存储：`posts` 表新增 `is_sticky` 整数列（0/1，默认 0；SQLite/MySQL 各一份 migration，
+  ADD COLUMN 双方言均可）。旧行自动为 0，对已有安装幂等
+- 形状：`PostPublic`/`PostDetail`/`SearchResult`/`PostAdmin` 均新增 `is_sticky: bool`；
+  前台列表摘要卡对置顶文章显示「置顶」徽章（前端渲染约定）
+- 排序范围：`GET /api/posts` 的 `recent` 序（默认序）改为 **is_sticky DESC, published_at DESC**
+  ——tag/category/year/month 过滤（标签页/分类页/归档月份页共用同一接口）同此规则。
+  **不受置顶影响、保持原有排序的**：`order=hot`（comment_count DESC）、`GET /api/search`
+  （published_at DESC）、RSS 与 sitemap（纯时间序 published_at DESC）
+- 管理端：
+  - `PATCH /api/admin/posts/:id/sticky` body `{is_sticky: bool}` → `PostAdmin`（行内快捷切换；
+    选独立 PATCH 而非并入 PUT：与页面 `PATCH /:id/toggle` 同风格，避免后台列表快捷操作
+    携带全量 PUT body，对契约破坏最小）
+  - `POST`/`PUT /api/admin/posts` body 亦接受可选 `is_sticky`（编辑器置顶开关；缺省：
+    POST=false、PUT=保持原值）
+  - 置顶不校验文章状态（草稿/定时文章也可先置顶；未公开可见的文章本来就不出现在公开列表，
+    置顶仅在文章公开可见后产生排序效果）
+  - sticky 切换会更新 updated_at（与其他管理写操作一致）
+
+### 定时发布（status=scheduled，惰性发布方案）
+- status 枚举新增 `scheduled`（status 列为 TEXT，**无需迁移改表**）；
+  `PostAdmin.published_at` 在 scheduled 状态下即计划发布时间（RFC3339 UTC）
+- **惰性可见性（不引入后台定时器）**：所有公开查询（列表/详情/标签/分类/归档/搜索/RSS/
+  sitemap/评论目标可见性）的可见条件从 `status='published'` 改为
+  `(status='published' OR (status='scheduled' AND published_at <= :now))`；`:now` 由 Rust 侧
+  每次请求以 RFC3339 UTC 字符串绑定传入（字典序即时间序，SQLite/MySQL 共用一份 SQL；
+  published_at 为 NULL 时比较结果为 NULL，自然排除）。到点自动可见，**零后台任务、无需重启**
+- 计数类逻辑同口径采用可见性条件：分类/标签 post_count（公开与 admin 列表/改名响应）、
+  站点统计 `SiteStats.post_count`、归档计数
+- 状态到达后 status 仍保持 `scheduled`（无后台任务改写），公开可见性完全由查询条件决定；
+  后台列表状态列显示「定时发布」+ 计划时间（前端渲染约定）
+- 校验（失败 → 422 `validation_error`，带明确 message）：
+  - POST/PUT 使 status 变为 `scheduled`（或 PUT 显式提供 published_at 改期）时：
+    published_at 必填、必须为合法 RFC3339、且必须晚于当前时间（「请使用未来时间」）；
+    写入前归一化为 UTC 秒精度（如 `2026-10-03T12:00:00Z`，前端本地时区输入自行转 UTC）
+  - **编辑已到点的 scheduled 文章**（不改 status、不提供 published_at，如只改标题/正文）
+    不重新校验未来时间——否则惰性可见后文章将永远无法编辑
+  - body 的 `published_at` 字段仅在 status=scheduled 时被接受；status=published/draft 时忽略
+- 状态转换：
+  - `scheduled → published`：允许（**立即发布**），published_at 改写为当前时间，
+    触发 post.after_publish 钩子
+  - `published → scheduled`：拒绝 → 422 `validation_error`（「已发布文章不能改为定时发布，
+    请先转为草稿」）
+  - `scheduled → draft`：允许（取消定时），published_at 清空为 null
+  - `draft → published`：现有行为不变（published_at 为空则写入当前时间）
+- 管理接口：`GET /api/admin/posts?status=scheduled` 过滤定时文章；`all` 含 scheduled
+- 钩子说明（扩展契约）：post.after_publish 仅在**显式发布动作**（创建即发布、
+  draft→published、scheduled→published 手动切换）时触发；惰性到点可见**不触发**钩子
+  （无后台任务），此为惰性方案的固有取舍
+- RSS/sitemap：到点的 scheduled 文章正常进入（可见性条件），排序保持纯时间序不受置顶影响
+
 ## 鉴权
 - `POST /api/auth/login` body `{username, password}` → 200 `AuthResult`；错误 → 401 `invalid_credentials`
 - `GET /api/auth/me`（Bearer）→ `{"username"}`；无效/过期 → 401 `unauthorized`
 - JWT HS256，有效期 7 天，secret 来自 config.toml
 
 ## 管理接口（全部需要 Bearer）
-文章：
-- `GET /api/admin/posts?status=<draft|published|all>&page&per_page` → 分页 `[PostAdmin]`，updated_at DESC
+文章（2026-10-03 置顶与定时发布扩展，完整规则见「文章置顶与定时发布」）：
+- `GET /api/admin/posts?status=<draft|published|scheduled|all>&page&per_page` → 分页 `[PostAdmin]`，updated_at DESC
+  - status 过滤支持 `scheduled`（定时发布）；`all`（缺省）含全部三种状态；非法值 → 422 `validation_error`
 - `POST /api/admin/posts` → 201 `PostAdmin`
-  - body: `{title, slug?, content_md, excerpt?, category_id?, tag_ids?: [int], status}`
+  - body: `{title, slug?, content_md, excerpt?, category_id?, tag_ids?: [int], status,
+    is_sticky?, published_at?}`
   - slug 为空时自动生成（ASCII slugify；纯中文标题则回退 `post-<id>`，插入后回填）；slug 唯一，冲突返回 409 `slug_taken`
-  - status=published 且首次发布时写 published_at
+  - status=published 且首次发布时写 published_at（body 的 published_at 忽略）
+  - status=scheduled 时 published_at 必填且必须是未来时间（RFC3339；写入时归一化为
+    UTC 秒精度），否则 → 422 `validation_error`
+  - is_sticky 可选（缺省 false）
 - `GET /api/admin/posts/:id` → `PostAdmin`
-- `PUT /api/admin/posts/:id` → `PostAdmin`（同 POST body，字段可选更新；draft→published 时若 published_at 为空则写入）
+- `PUT /api/admin/posts/:id` → `PostAdmin`（同 POST body，字段可选更新；draft→published 时若
+  published_at 为空则写入；scheduled→published 为「立即发布」，published_at 改写为当前时间；
+  published→scheduled 拒绝 → 422；scheduled→draft 清空 published_at；其余状态转换规则与
+  published_at/is_sticky 语义见「文章置顶与定时发布」）
+- `PATCH /api/admin/posts/:id/sticky`（2026-10-03 置顶新增）→ `PostAdmin`
+  - body: `{is_sticky: bool}`（必填）；行内快捷置顶/取消置顶，不改其他字段
+  - id 不存在 → 404 `not_found`；未登录/token 无效 → 401 `unauthorized`
 - `DELETE /api/admin/posts/:id` → 204
 
 分类/标签：

@@ -27,6 +27,8 @@ pub struct PostPublic {
     pub tags: Vec<CategoryRef>,
     pub published_at: String,
     pub comment_count: i64,
+    /// 是否置顶（契约「文章置顶与定时发布」条款）；前台列表卡显示「置顶」徽章
+    pub is_sticky: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -56,11 +58,15 @@ pub struct PostAdmin {
     pub slug: String,
     pub content_md: String,
     pub excerpt: String,
+    /// "draft" | "published" | "scheduled"（scheduled 为定时发布，契约 2026-10-03 新增）
     pub status: String,
     pub category_id: Option<i64>,
     pub category_name: Option<String>,
     pub tag_ids: Vec<i64>,
+    /// status=scheduled 时即计划发布时间（RFC3339 UTC）
     pub published_at: Option<String>,
+    /// 是否置顶（契约「文章置顶与定时发布」条款）
+    pub is_sticky: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -319,8 +325,22 @@ pub struct PostBody {
     pub category_id: Option<Option<i64>>,
     #[serde(default)]
     pub tag_ids: Option<Vec<i64>>,
+    /// "draft" | "published" | "scheduled"（POST 必填；PUT 缺省保持原值）
     #[serde(default)]
     pub status: Option<String>,
+    /// 置顶（契约「文章置顶与定时发布」条款）：POST 缺省 false；PUT 缺省保持原值
+    #[serde(default)]
+    pub is_sticky: Option<bool>,
+    /// 计划发布时间（RFC3339）：仅 status=scheduled 时接受——POST 必填且须为未来时间；
+    /// PUT 提供时为「改期」（同样校验未来时间）。其余状态忽略此字段
+    #[serde(default)]
+    pub published_at: Option<String>,
+}
+
+/// PATCH /api/admin/posts/:id/sticky 请求体（行内快捷置顶/取消置顶）
+#[derive(Debug, Clone, Deserialize)]
+pub struct StickyBody {
+    pub is_sticky: bool,
 }
 
 fn de_opt_opt<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>

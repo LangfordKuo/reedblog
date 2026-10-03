@@ -218,6 +218,9 @@ export const api = {
     createPost: (body: PostSaveBody) => request<PostAdmin>("POST", "/admin/posts", body),
     updatePost: (id: number, body: Partial<PostSaveBody>) =>
       request<PostAdmin>("PUT", `/admin/posts/${id}`, body),
+    // 行内快捷置顶/取消置顶（契约「文章置顶与定时发布」条款）
+    setPostSticky: (id: number, isSticky: boolean) =>
+      request<PostAdmin>("PATCH", `/admin/posts/${id}/sticky`, { is_sticky: isSticky }),
     deletePost: (id: number) => request<void>("DELETE", `/admin/posts/${id}`),
 
     categories: () => request<Category[]>("GET", "/admin/categories"),

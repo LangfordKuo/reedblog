@@ -1,6 +1,8 @@
 //! RSS 2.0 feed 与 sitemap.xml（契约「RSS 与 sitemap」条款；已安装后公开）：
-//! - GET /api/feed.xml    → 最新 20 篇 published 文章，RFC 822 pubDate，全文本 XML 转义
-//! - GET /api/sitemap.xml → 首页 + 全部 published 文章（lastmod=updated_at）+ 标签/分类/归档索引
+//! - GET /api/feed.xml    → 最新 20 篇公开可见文章（含到点的 scheduled），RFC 822 pubDate，
+//!   全文本 XML 转义
+//! - GET /api/sitemap.xml → 首页 + 全部公开可见文章（lastmod=updated_at）+ 标签/分类/归档索引
+//! - 两者均保持纯时间序（published_at DESC），**不受置顶影响**（契约「文章置顶与定时发布」）
 //!
 //! 站点绝对 URL（契约「RSS 与 sitemap」优先级）：站点设置 base_url → config.toml
 //! [server] base_url（均去尾 /）→ 请求头推导（X-Forwarded-Proto/X-Forwarded-Host 优先，
@@ -12,9 +14,9 @@ use axum::response::{IntoResponse, Response};
 use sqlx::Row;
 
 use crate::error::ApiResult;
-use crate::state::{require_pool, AppState};
+use crate::state::{now_rfc3339, require_pool, AppState};
 
-use super::helpers::derive_excerpt;
+use super::helpers::{derive_excerpt, VISIBLE_POST_SQL};
 
 /// feed 中最多输出的文章数
 const FEED_POST_LIMIT: i64 = 20;
@@ -99,13 +101,17 @@ pub async fn feed_xml(State(state): State<AppState>, headers: HeaderMap) -> ApiR
     let settings = crate::settings::load(&pool, &state).await?;
     let base = site_base_url(&settings.base_url, &state.configured_base_url(), &headers);
 
-    let rows = sqlx::query(
-        "SELECT title, slug, excerpt, content_md, published_at FROM posts \
-         WHERE status = 'published' ORDER BY published_at DESC LIMIT ?",
-    )
-    .bind(FEED_POST_LIMIT)
-    .fetch_all(&pool)
-    .await?;
+    // 公开可见文章（含到点的 scheduled）；保持纯时间序——RSS 不受置顶影响
+    // （契约「文章置顶与定时发布」条款）
+    let sql = format!(
+        "SELECT p.title, p.slug, p.excerpt, p.content_md, p.published_at FROM posts p \
+         WHERE {VISIBLE_POST_SQL} ORDER BY p.published_at DESC LIMIT ?"
+    );
+    let rows = sqlx::query(&sql)
+        .bind(now_rfc3339())
+        .bind(FEED_POST_LIMIT)
+        .fetch_all(&pool)
+        .await?;
 
     let description = if settings.subtitle.trim().is_empty() {
         settings.title.clone()
@@ -176,12 +182,15 @@ pub async fn sitemap_xml(State(state): State<AppState>, headers: HeaderMap) -> A
     let settings = crate::settings::load(&pool, &state).await?;
     let base = site_base_url(&settings.base_url, &state.configured_base_url(), &headers);
 
-    let rows = sqlx::query(
-        "SELECT slug, updated_at FROM posts \
-         WHERE status = 'published' ORDER BY published_at DESC",
-    )
-    .fetch_all(&pool)
-    .await?;
+    // 公开可见文章（含到点的 scheduled）；纯时间序，不受置顶影响
+    let posts_sql = format!(
+        "SELECT p.slug, p.updated_at FROM posts p \
+         WHERE {VISIBLE_POST_SQL} ORDER BY p.published_at DESC"
+    );
+    let rows = sqlx::query(&posts_sql)
+        .bind(now_rfc3339())
+        .fetch_all(&pool)
+        .await?;
     // enabled 页面（契约「页面」条款：sitemap 追加，sort_order ASC 排在文章之后）
     let page_rows = sqlx::query(
         "SELECT slug, updated_at FROM pages \

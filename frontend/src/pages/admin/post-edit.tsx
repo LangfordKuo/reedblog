@@ -16,12 +16,37 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { api, errorMessage } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import type { Category, PostSaveBody, PostStatus, Tag } from "@/lib/types"
 
 const NO_CATEGORY = "none"
+
+/** 发布状态选项（scheduled=定时发布，契约「文章置顶与定时发布」条款） */
+const STATUS_OPTIONS: { value: PostStatus; label: string }[] = [
+  { value: "draft", label: "草稿" },
+  { value: "published", label: "发布" },
+  { value: "scheduled", label: "定时发布" },
+]
+
+/** RFC3339 UTC → datetime-local 输入值（本地时区 YYYY-MM-DDTHH:mm） */
+function utcToLocalInput(ts: string | null): string {
+  if (!ts) return ""
+  const d = new Date(ts)
+  if (Number.isNaN(d.getTime())) return ""
+  const pad = (n: number) => String(n).padStart(2, "0")
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+/** datetime-local 输入值（本地时区）→ RFC3339 UTC（后端再归一化为秒精度存储） */
+function localInputToUtc(value: string): string | null {
+  if (!value) return null
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return null
+  return d.toISOString()
+}
 
 export default function AdminPostEditPage() {
   const { id } = useParams()
@@ -40,6 +65,10 @@ export default function AdminPostEditPage() {
   const [categoryId, setCategoryId] = useState<string>(NO_CATEGORY)
   const [tagIds, setTagIds] = useState<number[]>([])
   const [status, setStatus] = useState<PostStatus>("draft")
+  // 置顶开关（契约「文章置顶与定时发布」条款）
+  const [isSticky, setIsSticky] = useState(false)
+  // 定时发布时间（datetime-local 输入值，本地时区；保存时转 UTC）
+  const [scheduleLocal, setScheduleLocal] = useState("")
   const [categories, setCategories] = useState<Category[]>([])
   const [tags, setTags] = useState<Tag[]>([])
   const [newTag, setNewTag] = useState("")
@@ -74,6 +103,9 @@ export default function AdminPostEditPage() {
           setCategoryId(p.category_id === null ? NO_CATEGORY : String(p.category_id))
           setTagIds(p.tag_ids)
           setStatus(p.status)
+          setIsSticky(p.is_sticky)
+          // scheduled 文章回显计划时间（UTC → 本地时区输入值）
+          setScheduleLocal(p.status === "scheduled" ? utcToLocalInput(p.published_at) : "")
           setCurrentSlug(p.slug)
           setCurrentStatus(p.status)
         })
@@ -126,7 +158,6 @@ export default function AdminPostEditPage() {
       toast.error("请填写文章标题")
       return
     }
-    setSaving(true)
     const body: PostSaveBody = {
       title: title.trim(),
       ...(slug.trim() ? { slug: slug.trim() } : {}),
@@ -135,23 +166,44 @@ export default function AdminPostEditPage() {
       category_id: categoryId === NO_CATEGORY ? null : Number(categoryId),
       tag_ids: tagIds,
       status,
+      is_sticky: isSticky,
     }
+    // 定时发布：计划时间必填且须为未来时间（本地时区输入 → UTC 存储；与后端 422 校验同款规则，
+    // 前端先行拦截给出即时提示）
+    if (status === "scheduled") {
+      const iso = localInputToUtc(scheduleLocal)
+      if (!iso) {
+        toast.error("定时发布必须选择发布时间")
+        return
+      }
+      if (new Date(iso).getTime() <= Date.now()) {
+        toast.error("定时发布时间必须晚于当前时间，请使用未来时间")
+        return
+      }
+      body.published_at = iso
+    }
+    setSaving(true)
     try {
       if (isEdit) {
         await api.admin.updatePost(Number(id), body)
-        toast.success("文章已保存")
+        toast.success(
+          status === "scheduled" ? "已保存，将按计划时间自动发布" : "文章已保存",
+        )
       } else {
         await api.admin.createPost(body)
-        toast.success(status === "published" ? "文章已发布" : "草稿已创建")
+        toast.success(
+          status === "published"
+            ? "文章已发布"
+            : status === "scheduled"
+              ? "已创建定时发布，到点自动公开可见"
+              : "草稿已创建",
+        )
       }
       navigate("/admin/posts")
     } catch (err) {
-      toast.error(
-        errorMessage(err, {
-          slug_taken: "Slug 已被占用，请换一个",
-          validation_error: "内容校验失败，请检查填写项",
-        }),
-      )
+      // validation_error 不再整体覆盖：后端消息已足够可读（如「定时发布时间必须晚于当前时间」），
+      // 透传具体原因
+      toast.error(errorMessage(err, { slug_taken: "Slug 已被占用，请换一个" }))
     } finally {
       setSaving(false)
     }
@@ -193,23 +245,41 @@ export default function AdminPostEditPage() {
           )}
         </div>
         <div className="flex items-center gap-3">
-          {/* 草稿 / 发布切换 */}
+          {/* 草稿 / 发布 / 定时发布切换 */}
           <div className="inline-flex rounded-md border p-0.5" role="group" aria-label="发布状态">
-            {(["draft", "published"] as const).map((s) => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => setStatus(s)}
-                className={cn(
-                  "rounded px-3 py-1 text-sm transition-colors",
-                  status === s
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
-                )}
-              >
-                {s === "draft" ? "草稿" : "发布"}
-              </button>
-            ))}
+            {STATUS_OPTIONS.map((opt) => {
+              // 后端拒绝 published→scheduled（契约：先转草稿），此处直接置灰提示
+              const disabled = opt.value === "scheduled" && currentStatus === "published"
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  disabled={disabled}
+                  title={
+                    disabled ? "已发布文章不能直接改为定时发布，请先转为草稿" : undefined
+                  }
+                  onClick={() => {
+                    setStatus(opt.value)
+                    // 首次切到定时发布：默认预填「1 小时后」（本地时区显示）
+                    if (opt.value === "scheduled" && !scheduleLocal) {
+                      setScheduleLocal(
+                        utcToLocalInput(new Date(Date.now() + 3600_000).toISOString()),
+                      )
+                    }
+                  }}
+                  className={cn(
+                    "rounded px-3 py-1 text-sm transition-colors",
+                    status === opt.value
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+                    disabled &&
+                      "cursor-not-allowed opacity-40 hover:bg-transparent hover:text-muted-foreground",
+                  )}
+                >
+                  {opt.label}
+                </button>
+              )
+            })}
           </div>
           <Button onClick={() => void handleSave()} disabled={saving}>
             {saving ? <Loader2Icon className="animate-spin" /> : <SaveIcon />}
@@ -251,6 +321,21 @@ export default function AdminPostEditPage() {
               className="min-h-16"
             />
           </div>
+          {/* 定时发布时间（status=scheduled 时必填；本地时区输入、保存转 UTC） */}
+          {status === "scheduled" && (
+            <div className="grid gap-1.5 sm:max-w-md">
+              <Label htmlFor="post-schedule">定时发布时间 *（本地时区）</Label>
+              <Input
+                id="post-schedule"
+                type="datetime-local"
+                value={scheduleLocal}
+                onChange={(e) => setScheduleLocal(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                到点后自动公开可见（无需重启）；保存时转换为 UTC，必须晚于当前时间
+              </p>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -330,6 +415,21 @@ export default function AdminPostEditPage() {
               </Button>
             </div>
           </div>
+
+          {/* 置顶开关（契约「文章置顶与定时发布」条款） */}
+          <div className="flex items-center justify-between gap-4 border-t pt-5 sm:max-w-md">
+            <div className="grid gap-0.5">
+              <Label>置顶文章</Label>
+              <p className="text-xs text-muted-foreground">
+                前台列表排在最前并显示「置顶」徽章；RSS/sitemap/搜索排序不受影响
+              </p>
+            </div>
+            <Switch
+              aria-label="置顶文章"
+              checked={isSticky}
+              onCheckedChange={setIsSticky}
+            />
+          </div>
         </CardContent>
       </Card>
 
@@ -337,7 +437,13 @@ export default function AdminPostEditPage() {
       <div className="flex justify-end">
         <Button onClick={() => void handleSave()} disabled={saving}>
           {saving ? <Loader2Icon className="animate-spin" /> : <SaveIcon />}
-          {isEdit ? "保存修改" : status === "published" ? "创建并发布" : "创建草稿"}
+          {isEdit
+            ? "保存修改"
+            : status === "published"
+              ? "创建并发布"
+              : status === "scheduled"
+                ? "创建定时发布"
+                : "创建草稿"}
         </Button>
       </div>
     </div>
