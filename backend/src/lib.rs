@@ -4,6 +4,7 @@ pub mod auth;
 pub mod config;
 pub mod error;
 pub mod handlers;
+pub mod mailer;
 pub mod media;
 pub mod middleware;
 pub mod models;
@@ -30,7 +31,7 @@ use tower_http::cors::CorsLayer;
 use config::Config;
 use error::ApiError;
 use handlers::{
-    admin_comments, admin_media, admin_pages, admin_plugins, admin_posts, admin_terms,
+    admin_comments, admin_media, admin_pages, admin_plugins, admin_posts, admin_smtp, admin_terms,
     admin_themes, feed, frontend, install, public, site_auth, site_settings, uploads,
 };
 // handlers::pages 与领域模块 crate::pages 同名，导入时加别名区分
@@ -178,6 +179,13 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
             get(site_settings::admin_get_site_settings)
                 .put(site_settings::admin_update_site_settings),
         )
+        // 管理：邮件通知（契约「邮件通知（SMTP）」条款；密码只读 config.toml/env，
+        // 绝不入库、绝不返回——接口只回 has_password）
+        .route(
+            "/admin/smtp",
+            get(admin_smtp::admin_get_smtp).put(admin_smtp::admin_update_smtp),
+        )
+        .route("/admin/smtp/test", post(admin_smtp::admin_test_smtp))
         // 管理：图片上传（请求体上限 = 配置文件大小上限 + multipart 开销余量；
         // 超限文件由 handler 逐块计数报 422 file_too_large）
         .route(

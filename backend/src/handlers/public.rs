@@ -611,6 +611,7 @@ pub async fn list_comments(
 pub async fn create_comment(
     State(state): State<AppState>,
     Path(slug): Path<String>,
+    headers: HeaderMap,
     body: ValidJson<CreateCommentRequest>,
 ) -> ApiResult<(StatusCode, Json<CommentPub>)> {
     let Json(req) = body.map_err(ApiError::from)?;
@@ -627,6 +628,20 @@ pub async fn create_comment(
         "评论被插件拦截",
     )
     .await?;
+    // 邮件通知（契约「邮件通知」条款）：写库成功、钩子链之后触发，发送在后台任务中异步
+    // 完成（失败只记日志），绝不影响本响应的形状与时延
+    crate::mailer::spawn_comment_notification(
+        &state,
+        &headers,
+        crate::mailer::CommentNotice {
+            target_type: "post".to_string(),
+            target_id: post_id,
+            slug: slug.clone(),
+            author_name: created.author_name.clone(),
+            content: created.content.clone(),
+            is_reply: created.parent_id.is_some(),
+        },
+    );
     Ok((StatusCode::CREATED, Json(created)))
 }
 

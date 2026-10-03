@@ -22,6 +22,17 @@ pub struct Config {
     pub themes: ThemesConfig,
     #[serde(default)]
     pub uploads: UploadsConfig,
+    #[serde(default)]
+    pub smtp: SmtpConfig,
+}
+
+/// [smtp]：仅存 SMTP 密码（安全默认——密码绝不入库、绝不经 API 返回；
+/// 其余 SMTP 项存 settings 表、后台可配，见契约「邮件通知」）。
+/// 环境变量 REEDBLOG_SMTP_PASSWORD 优先于本段。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SmtpConfig {
+    #[serde(default)]
+    pub password: String,
 }
 
 /// [uploads]：图片上传存储根目录（相对后端运行目录或绝对路径）+ 单文件大小上限（MB）
@@ -291,6 +302,7 @@ mod tests {
             plugins: PluginsConfig::default(),
             themes: ThemesConfig::default(),
             uploads: UploadsConfig::default(),
+            smtp: SmtpConfig::default(),
         }
     }
 

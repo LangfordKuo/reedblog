@@ -32,6 +32,43 @@ export interface SiteSettingsSaveBody {
   base_url?: string
 }
 
+/** SMTP TLS 模式（契约「邮件通知」条款） */
+export type SmtpTls = "starttls" | "implicit" | "none"
+
+/** 最近一次邮件发送尝试结果（内存态；契约 SmtpSettingsAdmin.last_result） */
+export interface SmtpLastResult {
+  ok: boolean
+  message: string
+  at: string
+}
+
+/** GET/PUT /api/admin/smtp 响应（契约 SmtpSettingsAdmin；密码永不返回，只有 has_password） */
+export interface SmtpSettingsAdmin {
+  enabled: boolean
+  host: string
+  port: number
+  username: string
+  from_name: string
+  from_email: string
+  to_email: string
+  tls: SmtpTls
+  /** 密码是否已在 config.toml [smtp] password / 环境变量中配置 */
+  has_password: boolean
+  last_result: SmtpLastResult | null
+}
+
+/** PUT /api/admin/smtp 请求体（部分更新语义；密码不在此接口内） */
+export interface SmtpSettingsSaveBody {
+  enabled?: boolean
+  host?: string
+  port?: number
+  username?: string
+  from_name?: string
+  from_email?: string
+  to_email?: string
+  tls?: SmtpTls
+}
+
 export interface NamedRef {
   id: number
   name: string

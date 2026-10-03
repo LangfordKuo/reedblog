@@ -277,6 +277,78 @@ impl From<&crate::settings::SiteSettings> for SiteSettingsAdmin {
     }
 }
 
+/// 最近一次邮件发送尝试的结果（契约「邮件通知」；内存态、不落库，message 不含密码）
+#[derive(Debug, Clone, Serialize)]
+pub struct LastSendResult {
+    pub ok: bool,
+    pub message: String,
+    /// RFC3339 UTC（全库时间戳惯例）
+    pub at: String,
+}
+
+/// GET/PUT /api/admin/smtp 响应（契约 SmtpSettingsAdmin；**永不返回密码**，
+/// 只有布尔 has_password）
+#[derive(Debug, Clone, Serialize)]
+pub struct SmtpSettingsAdmin {
+    pub enabled: bool,
+    pub host: String,
+    pub port: i64,
+    pub username: String,
+    pub from_name: String,
+    pub from_email: String,
+    pub to_email: String,
+    pub tls: String,
+    pub has_password: bool,
+    pub last_result: Option<LastSendResult>,
+}
+
+/// PUT /api/admin/smtp 请求体（部分更新：缺失/null 字段保持原值）
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SmtpSettingsBody {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub host: Option<String>,
+    #[serde(default)]
+    pub port: Option<i64>,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub from_name: Option<String>,
+    #[serde(default)]
+    pub from_email: Option<String>,
+    #[serde(default)]
+    pub to_email: Option<String>,
+    #[serde(default)]
+    pub tls: Option<String>,
+}
+
+impl SmtpSettingsBody {
+    /// 合并到现有设置（字符串统一 trim；tls 小写化）；校验由 mailer::validate 负责
+    pub fn apply_to(self, base: &crate::mailer::SmtpSettings) -> crate::mailer::SmtpSettings {
+        crate::mailer::SmtpSettings {
+            enabled: self.enabled.unwrap_or(base.enabled),
+            host: self.host.map_or_else(|| base.host.clone(), |v| v.trim().to_string()),
+            port: self.port.unwrap_or(base.port),
+            username: self
+                .username
+                .map_or_else(|| base.username.clone(), |v| v.trim().to_string()),
+            from_name: self
+                .from_name
+                .map_or_else(|| base.from_name.clone(), |v| v.trim().to_string()),
+            from_email: self
+                .from_email
+                .map_or_else(|| base.from_email.clone(), |v| v.trim().to_string()),
+            to_email: self
+                .to_email
+                .map_or_else(|| base.to_email.clone(), |v| v.trim().to_string()),
+            tls: self
+                .tls
+                .map_or_else(|| base.tls.clone(), |v| v.trim().to_ascii_lowercase()),
+        }
+    }
+}
+
 /// 分页响应统一形状
 #[derive(Debug, Clone, Serialize)]
 pub struct Page<T: Serialize> {

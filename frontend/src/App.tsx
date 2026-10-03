@@ -6,6 +6,7 @@ import { SiteLayout } from "@/components/site-layout"
 import { Toaster } from "@/components/ui/sonner"
 import AdminCategoriesPage from "@/pages/admin/categories"
 import AdminCommentsPage from "@/pages/admin/comments"
+import AdminEmailPage from "@/pages/admin/email"
 import DashboardPage from "@/pages/admin/dashboard"
 import AdminLayout from "@/pages/admin/layout"
 import AdminLoginPage from "@/pages/admin/login"
@@ -75,6 +76,8 @@ export default function App() {
               {/* 当前激活主题的设置面板（仿 Typecho「外观 → 设置」） */}
               <Route path="themes/settings" element={<AdminThemeSettingsPage />} />
               <Route path="settings" element={<AdminSettingsPage />} />
+              {/* 邮件通知（SMTP）：独立路径避免与 /admin/settings 前缀高亮互扰 */}
+              <Route path="email" element={<AdminEmailPage />} />
             </Route>
           </Route>
 

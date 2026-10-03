@@ -5,7 +5,7 @@
 //!   留言 = target_type='page' 的评论，复用评论管线：先发后审 + comment.before_create 钩子）
 
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use sqlx::AnyPool;
 use sqlx::Row;
@@ -123,6 +123,7 @@ pub async fn list_page_comments(
 pub async fn create_page_comment(
     State(state): State<AppState>,
     Path(slug): Path<String>,
+    headers: HeaderMap,
     body: ValidJson<CreateCommentRequest>,
 ) -> ApiResult<(StatusCode, Json<CommentPub>)> {
     let Json(req) = body.map_err(ApiError::from)?;
@@ -139,5 +140,18 @@ pub async fn create_page_comment(
         "留言被插件拦截",
     )
     .await?;
+    // 邮件通知（契约「邮件通知」条款）：页面留言与文章评论同一套异步发送，绝不阻塞响应
+    crate::mailer::spawn_comment_notification(
+        &state,
+        &headers,
+        crate::mailer::CommentNotice {
+            target_type: "page".to_string(),
+            target_id: page_id,
+            slug: slug.clone(),
+            author_name: created.author_name.clone(),
+            content: created.content.clone(),
+            is_reply: created.parent_id.is_some(),
+        },
+    );
     Ok((StatusCode::CREATED, Json(created)))
 }

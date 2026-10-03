@@ -81,6 +81,22 @@ async fn upsert_pool(pool: &AnyPool, name: &str, value: &str) -> Result<(), sqlx
     Ok(())
 }
 
+/// 单键写入（供邮件通知等其它设置域复用同一套 upsert 实现）
+pub async fn set_value(pool: &AnyPool, name: &str, value: &str) -> Result<(), sqlx::Error> {
+    upsert_pool(pool, name, value).await
+}
+
+/// 读取 settings 表全部键值（供邮件通知等其它设置域复用；调用方按键取缺省）
+pub async fn load_all(pool: &AnyPool) -> Result<Vec<(String, String)>, sqlx::Error> {
+    let rows = sqlx::query("SELECT name, value FROM settings")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|r| (r.get::<String, _>("name"), r.get::<String, _>("value")))
+        .collect())
+}
+
 /// 把一整份设置写入（安装默认值注入路径；逐键 upsert）
 pub async fn save_on_conn(conn: &mut AnyConnection, s: &SiteSettings) -> Result<(), sqlx::Error> {
     for (name, value) in to_pairs(s) {
@@ -113,14 +129,12 @@ fn to_pairs(s: &SiteSettings) -> [(&'static str, String); 7] {
 /// per_page 解析失败或越界时钳回 1~100（非法值兜底 DEFAULT_PER_PAGE）。
 pub async fn load(pool: &AnyPool, state: &AppState) -> ApiResult<SiteSettings> {
     let rt = state.runtime().await;
-    let rows = sqlx::query("SELECT name, value FROM settings")
-        .fetch_all(pool)
-        .await?;
+    let rows = load_all(pool).await?;
 
     let get = |key: &str| -> Option<String> {
         rows.iter()
-            .find(|r| r.get::<String, _>("name") == key)
-            .map(|r| r.get::<String, _>("value"))
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value.clone())
     };
 
     let per_page = get(KEY_PER_PAGE)

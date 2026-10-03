@@ -75,6 +75,12 @@ WidgetConfig   = {key, kind: WidgetKind, label, position: WidgetPosition,
                // 公开形状；custom 组件的 config 含 title（可空）与 html（已做 {{param}} 替换）
 WidgetAdmin    = WidgetConfig + {source: WidgetSource, enabled: bool, params: [ThemeSetting]}
                // 管理形状；params 为该组件可配置参数声明（复用 ThemeSetting 形状，见「主题设置」）
+SmtpSettingsAdmin = {enabled: bool, host, port: int, username, from_name, from_email,
+                     to_email, tls: "starttls"|"implicit"|"none",
+                     has_password: bool,   // 密码是否已配置；密码本身永不返回（见「邮件通知」）
+                     last_result: {ok: bool, message, at}|null}
+               // 2026-10-04 邮件通知新增，见「邮件通知（SMTP）」；
+               // last_result 为最近一次实际发送尝试的结果（内存态，重启清零，不落库）
 ```
 
 ## 安装向导（未初始化时）
@@ -598,6 +604,70 @@ docs/extensibility-contract.md「主题组件」与 docs/theme-development.md「
   - id 不存在 → 404 `not_found`；未登录/token 无效 → 401 `unauthorized`
   - **不做「被文章引用」硬拦截**（引用检查需 LIKE 全文、成本高）：删除仅在后台 UI 上提示
     「该图片可能已被文章引用，删除后旧文章里的该图会 404」
+
+## 邮件通知（SMTP，2026-10-04 新增）
+
+新评论/新回复创建成功后，向管理员邮箱（`to_email`）发送一封通知邮件。
+**发送异步进行（fire-and-forget），绝不影响评论创建接口的响应时间与结果**。
+
+### 配置来源与密码处理（安全默认）
+
+- **密码只从 `config.toml` 的 `[smtp] password` 或环境变量 `REEDBLOG_SMTP_PASSWORD`
+  读取（环境变量优先）**；**绝不写入数据库、绝不经任何 API 返回**——管理接口只回布尔
+  `has_password`
+- 其余项（`enabled`、`host`、`port`、`username`、`from_name`、`from_email`、`to_email`、
+  `tls`）存 `settings` 表，键名 `smtp_enabled` / `smtp_host` / `smtp_port` /
+  `smtp_username` / `smtp_from_name` / `smtp_from_email` / `smtp_to_email` / `smtp_tls`；
+  进程内实时生效（每次读取查库），修改后无需重启；升级旧库时按键回退默认值
+  （enabled=false、port=587、tls=starttls，其余空串）
+- tls 枚举：`starttls`（明文连接后 STARTTLS，默认）、`implicit`（隐式 TLS/SMTPS）、
+  `none`（明文，仅供内网/本地调试）
+- 长度上限：host ≤255、username ≤255、from_name ≤100、from_email/to_email ≤255
+
+### 管理接口（全部需要 Bearer；未登录/token 无效 → 401 `unauthorized`）
+
+- `GET /api/admin/smtp` → `SmtpSettingsAdmin`（**不含密码**，只有 `has_password`）
+- `PUT /api/admin/smtp` → 200 `SmtpSettingsAdmin`；**部分更新**语义（请求体只带要改的字段，
+  缺失字段保持原值；可选字段 null 视为缺失），返回更新合并后的完整设置；
+  body: `{enabled?, host?, port?, username?, from_name?, from_email?, to_email?, tls?}`
+  - 校验（失败 → 422 `validation_error`，带明确 message，均不写库）：
+    - port 整数 1~65535
+    - tls ∈ {starttls, implicit, none}
+    - from_email / to_email 非空时须为基本邮箱格式（`local@domain`，域名含 `.`、无空白）
+    - host 非空时不得含空白与 `/`、`:`
+    - enabled=true 时 host / from_email / to_email 必填
+- `POST /api/admin/smtp/test` → 202 `{"ok": true}`；**同步等待发送结果**（管理员主动点击，
+  可接受等待；接口内仍有约 10 秒超时兜底）
+  - 配置不完整（未填 host/发件/收件邮箱，或 username 非空但密码未配置）→ 422 `validation_error`
+  - SMTP 连接/发送失败 → 502 `smtp_send_failed`，message 为明确失败原因摘要
+  - 测试发送不要求 enabled=true（便于先验证再启用），不改变 enabled，也不改变设置
+
+### 通知事件与邮件内容
+
+- 触发点：文章评论（`POST /api/posts/:slug/comments`）与页面留言
+  （`POST /api/pages/:slug/comments`）**写库成功、comment.before_create 钩子链之后**；
+  每次成功创建恰好发一封（顶级评论与楼中楼回复各一封，回复邮件主题/正文标明「回复」）
+- 邮件内容（纯文本 text/plain UTF-8，不做 HTML 渲染）：
+  - 站点名称；目标（文章/页面）标题与**绝对 URL**——base_url 三级优先与 RSS/sitemap 相同
+    （站点设置 base_url → config.toml `[server] base_url` → 请求头推导）
+  - 评论者名、评论内容
+  - 后台评论管理链接 `{base}/admin/comments`
+- 主题：`[{站点名称}] 新评论：{标题}` / `[{站点名称}] 新回复：{标题}`
+
+### 投递语义（重要）
+
+- **异步、绝不阻塞评论请求**：创建成功后才 `tokio::spawn` 后台任务发送；发送失败只记日志
+  （`[reedblog] 邮件通知发送失败: …`），**不改变评论创建的响应**（仍 201 且形状不变）
+- SMTP 连接/发送超时约 10 秒（transport 超时 + 外层 `tokio::time::timeout` 双保险），
+  避免异常网络下后台任务堆积
+- `enabled=false` 或配置不完整（host / 收件邮箱 / 发件邮箱缺失，或 username 非空但密码
+  未配置）时**静默跳过**，不建立任何 SMTP 连接
+- **第一版不做持久化队列/重试队列**：个人博客评论量小，fire-and-forget + 日志足以覆盖
+  真实需求；引入队列表与重试调度需要新增迁移与运维面，收益不成比例。失败排查依赖日志与
+  内存态 `last_result`
+- 最近一次发送结果（内存态，重启清零，**不落库**）：`SmtpSettingsAdmin.last_result` =
+  `{ok: bool, message, at}|null`；message 为成功回执或失败原因摘要（**不含密码**），
+  at 为 RFC3339 UTC；每次实际发送尝试（评论通知与测试邮件）都会更新
 
 ## CORS
 - 后端允许来源：`http://localhost:5173`（可在 config.toml `[cors] allowed_origins` 配置，默认含此项）；允许方法 GET/POST/PUT/PATCH/DELETE/OPTIONS（PATCH 为 2026-10-03 页面 toggle 接口新增），允许头 Authorization/Content-Type

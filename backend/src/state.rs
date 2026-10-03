@@ -50,6 +50,8 @@ struct Inner {
     themes_dir: PathBuf,
     /// 图片上传存储根目录（config.toml [uploads] dir，启动时解析一次）
     uploads_dir: PathBuf,
+    /// 最近一次邮件发送尝试结果（内存态，重启清零；契约「邮件通知-投递语义」）
+    mail_last_result: std::sync::Mutex<Option<crate::models::LastSendResult>>,
 }
 
 #[derive(Clone)]
@@ -87,6 +89,7 @@ impl AppState {
                 view_dedup: crate::views::ViewDedup::default(),
                 themes_dir,
                 uploads_dir,
+                mail_last_result: std::sync::Mutex::new(None),
             }),
         }
     }
@@ -102,6 +105,26 @@ impl AppState {
     /// 浏览量去重表（重启清零；尽力去重语义见契约「浏览量与点赞」条款）
     pub fn view_dedup(&self) -> &crate::views::ViewDedup {
         &self.inner.view_dedup
+    }
+
+    /// 最近一次邮件发送尝试结果（内存态、重启清零；未发送过为 None）
+    pub fn mail_last_result(&self) -> Option<crate::models::LastSendResult> {
+        self.inner
+            .mail_last_result
+            .lock()
+            .ok()
+            .and_then(|g| g.clone())
+    }
+
+    /// 记录最近一次邮件发送尝试（成功/失败原因摘要；不得含密码）
+    pub fn set_mail_last_result(&self, ok: bool, message: &str) {
+        if let Ok(mut guard) = self.inner.mail_last_result.lock() {
+            *guard = Some(crate::models::LastSendResult {
+                ok,
+                message: message.to_string(),
+                at: now_rfc3339(),
+            });
+        }
     }
 
     pub fn themes_dir(&self) -> &Path {

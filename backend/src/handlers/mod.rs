@@ -3,6 +3,7 @@ pub mod admin_media;
 pub mod admin_pages;
 pub mod admin_plugins;
 pub mod admin_posts;
+pub mod admin_smtp;
 pub mod admin_terms;
 pub mod admin_themes;
 pub mod feed;

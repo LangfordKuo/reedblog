@@ -17,6 +17,7 @@ A lightweight blog system written in Rust, with plugin & theme extensibility.
 - 媒体库：后台上传图片统一入 `media` 表（同内容不重复入库），网格浏览（缩略图/尺寸/大小/时间）、复制 URL、删除（连带删除磁盘文件；删除前提示旧文章引用会 404）；本次改动前的历史文件由列表惰性扫描兜底可见
 - RSS 订阅（`/api/feed.xml`，最新 20 篇）与 sitemap（`/api/sitemap.xml`）；站点绝对 URL 支持 `[server] base_url` 配置，为空时按反代头（X-Forwarded-Proto/Host）推导
 - 全文搜索：`GET /api/search` 用 LIKE 实现（SQLite/MySQL 双方言零迁移，词条空白切分 AND 语义、通配符转义、仅 published），前端 `/search` 页 URL 携带查询词可分享，命中词 `<mark>` 高亮并显示纯文本上下文 snippet
+- 邮件通知（SMTP）：新评论/新回复创建成功后向管理员邮箱发通知邮件（含文章/页面标题与绝对链接、评论者、内容、后台管理链接）；后台「邮件通知」页可配 SMTP（STARTTLS/隐式 TLS/明文）与发送测试邮件。**密码只从 `config.toml` 的 `[smtp] password` 或环境变量 `REEDBLOG_SMTP_PASSWORD` 读取，绝不入库、绝不经接口返回**；发送异步进行（约 10 秒超时，失败只记日志），绝不影响评论发表
 - 前台暗色切换：light/dark/system 三态偏好（localStorage 持久化，默认跟随系统），`<head>` 内联脚本在首绘前应用防 FOUC，header sun/moon 一键直切
 - 前台：文章代码高亮（highlight.js）、响应式布局
 - 后台管理面板：仪表盘、文章、分类、标签、评论、插件、主题

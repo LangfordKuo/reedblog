@@ -326,6 +326,12 @@ dir = "plugins"
 [themes]
 dir = "themes"
 active = "default"
+
+# 邮件通知（2026-10-04 新增）：只在这里存 SMTP 密码（安全默认，绝不入库、
+# 绝不经 API 返回）；其余 SMTP 项在后台「邮件通知」页配置（settings 表）。
+# 环境变量 REEDBLOG_SMTP_PASSWORD 优先于本项。
+[smtp]
+password = ""
 ```
 
 ## 第五部分：数据表新增

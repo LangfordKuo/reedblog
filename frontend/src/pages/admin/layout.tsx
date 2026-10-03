@@ -8,6 +8,7 @@ import {
   ImageIcon,
   LayoutDashboardIcon,
   LogOutIcon,
+  MailIcon,
   MenuIcon,
   MessageSquareIcon,
   PaletteIcon,
@@ -37,6 +38,7 @@ const navItems = [
   { to: "/admin/themes", label: "主题", icon: PaletteIcon, end: true },
   { to: "/admin/themes/settings", label: "主题设置", icon: SlidersHorizontalIcon, end: true },
   { to: "/admin/settings", label: "站点管理", icon: SettingsIcon, end: false },
+  { to: "/admin/email", label: "邮件通知", icon: MailIcon, end: true },
 ]
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>

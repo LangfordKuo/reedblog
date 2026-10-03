@@ -29,6 +29,8 @@ import type {
   SiteSettingsAdmin,
   SiteSettingsSaveBody,
   SiteStats,
+  SmtpSettingsAdmin,
+  SmtpSettingsSaveBody,
   Tag,
   ThemeInfo,
   ThemeSettingValue,
@@ -287,6 +289,13 @@ export const api = {
     siteSettings: () => request<SiteSettingsAdmin>("GET", "/admin/site/settings"),
     updateSiteSettings: (body: SiteSettingsSaveBody) =>
       request<SiteSettingsAdmin>("PUT", "/admin/site/settings", body),
+
+    // 邮件通知（契约「邮件通知（SMTP）」条款）：密码永不返回，只有 has_password；
+    // testSmtp 同步等待发送结果（失败时抛 ApiError，message 即后端给的明确原因）
+    smtpSettings: () => request<SmtpSettingsAdmin>("GET", "/admin/smtp"),
+    updateSmtpSettings: (body: SmtpSettingsSaveBody) =>
+      request<SmtpSettingsAdmin>("PUT", "/admin/smtp", body),
+    testSmtp: () => request<{ ok: true }>("POST", "/admin/smtp/test"),
 
     // 插件管理（multipart 上传 zip，字段名 file）
     plugins: () => request<Items<PluginInfo>>("GET", "/admin/plugins"),
