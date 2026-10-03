@@ -18,6 +18,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { api, errorMessage } from "@/lib/api"
+import { clearPageDraft } from "@/lib/draft"
 import { formatDate } from "@/lib/utils"
 import type { PageAdmin, PageKind } from "@/lib/types"
 
@@ -72,6 +73,8 @@ export default function AdminPagesPage() {
     setDeleteLoading(true)
     try {
       await api.admin.deletePage(deleting.id)
+      // 页面已删除：清理对应本地草稿
+      clearPageDraft(deleting.id)
       toast.success(`已删除「${deleting.title}」`)
       setDeleting(null)
       load()

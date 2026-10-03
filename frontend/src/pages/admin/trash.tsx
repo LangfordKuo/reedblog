@@ -18,6 +18,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { api, errorMessage } from "@/lib/api"
+import { clearPostDraft } from "@/lib/draft"
 import { formatDate } from "@/lib/utils"
 import type { Page, PostAdmin } from "@/lib/types"
 
@@ -81,6 +82,8 @@ export default function AdminTrashPage() {
     setPurgeLoading(true)
     try {
       await api.admin.purgePost(purging.id)
+      // 彻底删除：清理对应本地草稿
+      clearPostDraft(purging.id)
       toast.success(`已彻底删除「${purging.title}」`)
       setPurging(null)
       load()

@@ -155,6 +155,7 @@ export default function AdminMediaPage() {
                   src={item.url}
                   alt={item.filename}
                   loading="lazy"
+                  decoding="async"
                   className="absolute inset-0 size-full object-contain"
                   onError={(e) => {
                     e.currentTarget.style.display = "none"

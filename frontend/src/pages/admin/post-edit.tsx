@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react"
+import { useEffect, useMemo, useState, type FormEvent } from "react"
 import { useNavigate, useParams } from "react-router-dom"
 import {
   ArrowLeftIcon,
@@ -10,6 +10,7 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
+import { DraftRestoreDialog } from "@/components/admin/draft-restore-dialog"
 import { RevisionHistoryDialog } from "@/components/admin/revision-history"
 import { MarkdownEditor } from "@/components/markdown-editor"
 import { BlockSpinner } from "@/components/spinner"
@@ -26,11 +27,33 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
+import { useAutosaveDraft } from "@/hooks/use-autosave-draft"
 import { api, errorMessage } from "@/lib/api"
+import {
+  clearDraft,
+  draftsEqual,
+  postDraftKey,
+  readDraft,
+  type DraftEnvelope,
+  type PostDraftData,
+} from "@/lib/draft"
 import { cn } from "@/lib/utils"
-import type { Category, PostSaveBody, PostStatus, Tag } from "@/lib/types"
+import type { Category, PostAdmin, PostSaveBody, PostStatus, Tag } from "@/lib/types"
 
 const NO_CATEGORY = "none"
+
+/** 新建文章的空白草稿（基线 + 草稿比对基准） */
+const EMPTY_POST_DRAFT: PostDraftData = {
+  title: "",
+  slug: "",
+  content: "",
+  excerpt: "",
+  categoryId: NO_CATEGORY,
+  tagIds: [],
+  status: "draft",
+  isSticky: false,
+  scheduleLocal: "",
+}
 
 /** 发布状态选项（scheduled=定时发布，契约「文章置顶与定时发布」条款） */
 const STATUS_OPTIONS: { value: PostStatus; label: string }[] = [
@@ -56,6 +79,21 @@ function localInputToUtc(value: string): string | null {
   return d.toISOString()
 }
 
+/** 服务端文章 → 草稿快照（tagIds 排序，保证选择顺序不同也能比较相等） */
+function toDraftSnapshot(p: PostAdmin): PostDraftData {
+  return {
+    title: p.title,
+    slug: p.slug,
+    content: p.content_md,
+    excerpt: p.excerpt ?? "",
+    categoryId: p.category_id === null ? NO_CATEGORY : String(p.category_id),
+    tagIds: [...p.tag_ids].sort((a, b) => a - b),
+    status: p.status,
+    isSticky: p.is_sticky,
+    scheduleLocal: p.status === "scheduled" ? utcToLocalInput(p.published_at) : "",
+  }
+}
+
 export default function AdminPostEditPage() {
   const { id } = useParams()
   const isEdit = id !== undefined
@@ -79,11 +117,21 @@ export default function AdminPostEditPage() {
   const [scheduleLocal, setScheduleLocal] = useState("")
   const [categories, setCategories] = useState<Category[]>([])
   const [tags, setTags] = useState<Tag[]>([])
+  /** 分类/标签选项是否已加载完成（草稿恢复时据此决定要不要校验 id 有效性） */
+  const [optionsLoaded, setOptionsLoaded] = useState(false)
   const [newTag, setNewTag] = useState("")
   const [creatingTag, setCreatingTag] = useState(false)
   const [saving, setSaving] = useState(false)
   // 修订历史对话框（仅编辑模式；契约「文章修订历史」条款）
   const [historyOpen, setHistoryOpen] = useState(false)
+  // 本地草稿（防丢稿）：serverDraft 为服务端基线（null=尚未加载完成，不写草稿），
+  // pendingDraft 为待用户决定的「恢复 / 丢弃」提示
+  const [serverDraft, setServerDraft] = useState<PostDraftData | null>(
+    isEdit ? null : EMPTY_POST_DRAFT,
+  )
+  const [pendingDraft, setPendingDraft] = useState<DraftEnvelope<PostDraftData> | null>(null)
+
+  const draftStorageKey = postDraftKey(isEdit ? Number(id) : "new")
 
   // 加载分类/标签选项；编辑模式下加载文章
   useEffect(() => {
@@ -96,6 +144,8 @@ export default function AdminPostEditPage() {
         setTags(tgs)
       } catch (e) {
         if (!cancelled) toast.error(errorMessage(e))
+      } finally {
+        if (!cancelled) setOptionsLoaded(true)
       }
     }
     void loadOptions()
@@ -118,6 +168,14 @@ export default function AdminPostEditPage() {
           setScheduleLocal(p.status === "scheduled" ? utcToLocalInput(p.published_at) : "")
           setCurrentSlug(p.slug)
           setCurrentStatus(p.status)
+          // 本地草稿：与服务端版本不同才提示恢复（相同则说明没有未保存的改动，直接清理）
+          const snapshot = toDraftSnapshot(p)
+          setServerDraft(snapshot)
+          const stored = readDraft<PostDraftData>(postDraftKey(Number(id)))
+          if (stored) {
+            if (draftsEqual(stored.data, snapshot)) clearDraft(postDraftKey(Number(id)))
+            else setPendingDraft(stored)
+          }
         })
         .catch((e) => {
           if (!cancelled) setLoadError(errorMessage(e))
@@ -130,6 +188,67 @@ export default function AdminPostEditPage() {
       cancelled = true
     }
   }, [id, isEdit])
+
+  // 新建文章：进入页面即检查本地草稿（存在且非空白才提示恢复）
+  useEffect(() => {
+    if (isEdit) return
+    const key = postDraftKey("new")
+    const stored = readDraft<PostDraftData>(key)
+    if (!stored) return
+    if (draftsEqual(stored.data, EMPTY_POST_DRAFT)) clearDraft(key)
+    else setPendingDraft(stored)
+  }, [isEdit])
+
+  // 当前编辑器快照 → 自动保存（1.5s 防抖 + 30s 强制；页面隐藏/卸载时补落）
+  const draftSnapshot = useMemo<PostDraftData>(
+    () => ({
+      title,
+      slug,
+      content,
+      excerpt,
+      categoryId,
+      tagIds: [...tagIds].sort((a, b) => a - b),
+      status,
+      isSticky,
+      scheduleLocal,
+    }),
+    [title, slug, content, excerpt, categoryId, tagIds, status, isSticky, scheduleLocal],
+  )
+  const { markSaved } = useAutosaveDraft({
+    storageKey: draftStorageKey,
+    data: draftSnapshot,
+    baseline: serverDraft,
+    enabled: !loading && !loadError,
+  })
+
+  /** 恢复草稿：字段回填。选项已加载时校验分类/标签是否仍存在（避免提交出 422）；
+   *  选项尚未加载（慢网络）时原样回填，绝不在不知情的情况下丢数据 */
+  const handleRestoreDraft = () => {
+    const d = pendingDraft?.data
+    if (!d) return
+    setTitle(d.title)
+    setSlug(d.slug)
+    setContent(d.content)
+    setExcerpt(d.excerpt)
+    setCategoryId(
+      !optionsLoaded ||
+        d.categoryId === NO_CATEGORY ||
+        categories.some((c) => String(c.id) === d.categoryId)
+        ? d.categoryId
+        : NO_CATEGORY,
+    )
+    setTagIds(optionsLoaded ? d.tagIds.filter((tid) => tags.some((t) => t.id === tid)) : d.tagIds)
+    setStatus(d.status)
+    setIsSticky(d.isSticky)
+    setScheduleLocal(d.scheduleLocal)
+    setPendingDraft(null)
+    toast.success("已恢复本地草稿，确认无误后请点击保存")
+  }
+
+  const handleDiscardDraft = () => {
+    clearDraft(draftStorageKey)
+    setPendingDraft(null)
+  }
 
   const toggleTag = (tagId: number) => {
     setTagIds((prev) =>
@@ -209,6 +328,8 @@ export default function AdminPostEditPage() {
               : "草稿已创建",
         )
       }
+      // 后端已确认保存：清除本地草稿（须在跳转卸载前，防止卸载补落把草稿写回）
+      markSaved()
       navigate("/admin/posts")
     } catch (err) {
       // validation_error 不再整体覆盖：后端消息已足够可读（如「定时发布时间必须晚于当前时间」），
@@ -475,6 +596,20 @@ export default function AdminPostEditPage() {
             setContent(p.content_md)
             setExcerpt(p.excerpt ?? "")
           }}
+        />
+      )}
+
+      {/* 本地草稿恢复提示（恢复 / 丢弃由用户决定，绝不静默覆盖服务器内容） */}
+      {pendingDraft && (
+        <DraftRestoreDialog
+          open
+          savedAt={pendingDraft.savedAt}
+          onOpenChange={(open) => {
+            // 关闭（X/Esc/遮罩）= 稍后决定：草稿保留，下次进入仍会提示
+            if (!open) setPendingDraft(null)
+          }}
+          onRestore={handleRestoreDraft}
+          onDiscard={handleDiscardDraft}
         />
       )}
     </div>

@@ -1,4 +1,4 @@
-import { useEffect } from "react"
+import { Suspense, useEffect } from "react"
 import { Outlet } from "react-router-dom"
 
 import { BlogLeftNav } from "@/components/blog-left-nav"
@@ -6,6 +6,7 @@ import { MinimalHeader } from "@/components/minimal-header"
 import { PluginInjections } from "@/components/plugin-injections"
 import { PostToc } from "@/components/post-toc"
 import { SiteFooter } from "@/components/site-footer"
+import { BlockSpinner } from "@/components/spinner"
 import { SiteHeader } from "@/components/site-header"
 import { WidgetRegion } from "@/components/widgets"
 import { useSite } from "@/hooks/use-site"
@@ -62,7 +63,10 @@ function TwoColumnShell({ site }: { site: SiteSettings | null }) {
           wide ? "max-w-7xl" : "max-w-5xl",
         )}
       >
-        <Outlet />
+        {/* 路由懒加载：站内跳转只替换内容区，顶栏/页脚外壳保留 */}
+        <Suspense fallback={<BlockSpinner />}>
+          <Outlet />
+        </Suspense>
       </main>
       <WidgetRegion
         region="footer"
@@ -98,7 +102,9 @@ function ThreeColumnShell({ site }: { site: SiteSettings | null }) {
             <WidgetRegion region="left" />
           </aside>
           <div className="min-w-0">
-            <Outlet />
+            <Suspense fallback={<BlockSpinner />}>
+              <Outlet />
+            </Suspense>
           </div>
           {hasRight && (
             <aside

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useNavigate, useParams } from "react-router-dom"
 import {
   ArrowDownIcon,
@@ -13,6 +13,7 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
+import { DraftRestoreDialog } from "@/components/admin/draft-restore-dialog"
 import { MarkdownEditor } from "@/components/markdown-editor"
 import { BlockSpinner } from "@/components/spinner"
 import { Badge } from "@/components/ui/badge"
@@ -21,13 +22,42 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
+import { useAutosaveDraft } from "@/hooks/use-autosave-draft"
 import { api, errorMessage } from "@/lib/api"
-import type { PageKind, PageLinkBody, PageSaveBody } from "@/lib/types"
+import {
+  clearDraft,
+  draftsEqual,
+  pageDraftKey,
+  readDraft,
+  type DraftEnvelope,
+  type PageDraftData,
+} from "@/lib/draft"
+import type { PageAdmin, PageKind, PageLinkBody, PageSaveBody } from "@/lib/types"
 
 const KIND_LABELS: Record<PageKind, string> = {
   custom: "普通页",
   message_board: "留言板",
   links: "友情链接",
+}
+
+/** 新建页面的空白草稿（基线 + 草稿比对基准） */
+const EMPTY_PAGE_DRAFT: PageDraftData = {
+  title: "",
+  slug: "",
+  content: "",
+  sortOrder: "0",
+  links: [],
+}
+
+/** 服务端页面 → 草稿快照（与编辑器受控字段一致；links 顺序即排序，保持原序） */
+function toDraftSnapshot(p: PageAdmin): PageDraftData {
+  return {
+    title: p.title,
+    slug: p.slug,
+    content: p.content_md,
+    sortOrder: String(p.sort_order),
+    links: p.links.map((l) => ({ name: l.name, url: l.url, description: l.description })),
+  }
 }
 
 /** 新建/编辑页面（契约「页面」条款）：
@@ -53,6 +83,13 @@ export default function AdminPageEditPage() {
   // 友情链接（仅 kind=links 生效；数组顺序即排序，保存时全量替换）
   const [links, setLinks] = useState<PageLinkBody[]>([])
   const [saving, setSaving] = useState(false)
+  // 本地草稿（防丢稿）：serverDraft 为服务端基线（null=尚未加载完成，不写草稿）
+  const [serverDraft, setServerDraft] = useState<PageDraftData | null>(
+    isEdit ? null : EMPTY_PAGE_DRAFT,
+  )
+  const [pendingDraft, setPendingDraft] = useState<DraftEnvelope<PageDraftData> | null>(null)
+
+  const draftStorageKey = pageDraftKey(isEdit ? Number(id) : "new")
 
   useEffect(() => {
     if (!isEdit) return
@@ -71,6 +108,15 @@ export default function AdminPageEditPage() {
         setEnabled(p.enabled)
         setCurrentSlug(p.slug)
         setLinks(p.links.map((l) => ({ name: l.name, url: l.url, description: l.description })))
+        // 本地草稿：与服务端版本不同才提示恢复（相同则直接清理）
+        const snapshot = toDraftSnapshot(p)
+        setServerDraft(snapshot)
+        const key = pageDraftKey(Number(id))
+        const stored = readDraft<PageDraftData>(key)
+        if (stored) {
+          if (draftsEqual(stored.data, snapshot)) clearDraft(key)
+          else setPendingDraft(stored)
+        }
       })
       .catch((e) => {
         if (!cancelled) setLoadError(errorMessage(e))
@@ -82,6 +128,46 @@ export default function AdminPageEditPage() {
       cancelled = true
     }
   }, [id, isEdit])
+
+  // 新建页面：进入页面即检查本地草稿（存在且非空白才提示恢复）
+  useEffect(() => {
+    if (isEdit) return
+    const key = pageDraftKey("new")
+    const stored = readDraft<PageDraftData>(key)
+    if (!stored) return
+    if (draftsEqual(stored.data, EMPTY_PAGE_DRAFT)) clearDraft(key)
+    else setPendingDraft(stored)
+  }, [isEdit])
+
+  // 当前编辑器快照 → 自动保存（1.5s 防抖 + 30s 强制；页面隐藏/卸载时补落）
+  const draftSnapshot = useMemo<PageDraftData>(
+    () => ({ title, slug, content, sortOrder, links }),
+    [title, slug, content, sortOrder, links],
+  )
+  const { markSaved } = useAutosaveDraft({
+    storageKey: draftStorageKey,
+    data: draftSnapshot,
+    baseline: serverDraft,
+    enabled: !loading && !loadError,
+  })
+
+  /** 恢复草稿：字段回填（含友情链接） */
+  const handleRestoreDraft = () => {
+    const d = pendingDraft?.data
+    if (!d) return
+    setTitle(d.title)
+    setSlug(d.slug)
+    setContent(d.content)
+    setSortOrder(d.sortOrder)
+    setLinks(d.links.map((l) => ({ name: l.name, url: l.url, description: l.description })))
+    setPendingDraft(null)
+    toast.success("已恢复本地草稿，确认无误后请点击保存")
+  }
+
+  const handleDiscardDraft = () => {
+    clearDraft(draftStorageKey)
+    setPendingDraft(null)
+  }
 
   const updateLink = (idx: number, patch: Partial<PageLinkBody>) => {
     setLinks((prev) => prev.map((l, i) => (i === idx ? { ...l, ...patch } : l)))
@@ -137,6 +223,8 @@ export default function AdminPageEditPage() {
         await api.admin.createPage(body)
         toast.success("页面已创建")
       }
+      // 后端已确认保存：清除本地草稿（须在跳转卸载前，防止卸载补落把草稿写回）
+      markSaved()
       navigate("/admin/pages")
     } catch (err) {
       toast.error(
@@ -361,6 +449,20 @@ export default function AdminPageEditPage() {
           {isEdit ? "保存修改" : "创建页面"}
         </Button>
       </div>
+
+      {/* 本地草稿恢复提示（恢复 / 丢弃由用户决定，绝不静默覆盖服务器内容） */}
+      {pendingDraft && (
+        <DraftRestoreDialog
+          open
+          savedAt={pendingDraft.savedAt}
+          onOpenChange={(open) => {
+            // 关闭（X/Esc/遮罩）= 稍后决定：草稿保留，下次进入仍会提示
+            if (!open) setPendingDraft(null)
+          }}
+          onRestore={handleRestoreDraft}
+          onDiscard={handleDiscardDraft}
+        />
+      )}
     </div>
   )
 }

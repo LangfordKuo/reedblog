@@ -28,6 +28,11 @@ export function Markdown({ children, className }: { children: string; className?
         rehypePlugins={[rehypeKatex, rehypeHighlight]}
         components={{
           a: ({ node: _node, ...props }) => <a target="_blank" rel="noreferrer" {...props} />,
+          // 正文图片懒加载：loading=lazy + decoding=async（首屏 hero 类图片由主题另行提供，
+          // 不经过本组件；媒体库缩略图与 widgets 的 HTML 注入也不受影响）
+          img: ({ node: _node, ...props }) => (
+            <img {...props} loading="lazy" decoding="async" />
+          ),
         }}
       >
         {preprocessMathSource(children)}

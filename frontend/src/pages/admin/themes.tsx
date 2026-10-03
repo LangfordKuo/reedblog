@@ -176,6 +176,8 @@ export default function AdminThemesPage() {
                           <img
                             src={t.preview_url}
                             alt={`${t.name} 预览`}
+                            loading="lazy"
+                            decoding="async"
                             className="h-14 w-24 rounded-md border object-cover"
                           />
                         ) : (

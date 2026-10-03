@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { Suspense, useEffect, useState } from "react"
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom"
 import {
   DatabaseBackupIcon,
@@ -21,6 +21,7 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
+import { BlockSpinner } from "@/components/spinner"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { clearToken, getStoredUsername } from "@/lib/auth"
@@ -142,7 +143,10 @@ export default function AdminLayout() {
       {/* 主内容区 */}
       <main className="min-w-0 flex-1 p-4 md:p-8">
         <div className="mx-auto w-full max-w-5xl">
-          <Outlet />
+          {/* 路由懒加载：后台站内跳转只替换内容区，侧栏外壳保留 */}
+          <Suspense fallback={<BlockSpinner />}>
+            <Outlet />
+          </Suspense>
         </div>
       </main>
     </div>

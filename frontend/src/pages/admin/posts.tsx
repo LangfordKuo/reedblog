@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/table"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { api, errorMessage } from "@/lib/api"
+import { clearPostDraft } from "@/lib/draft"
 import { formatDate } from "@/lib/utils"
 import type { Page, PostAdmin, PostStatus } from "@/lib/types"
 
@@ -96,6 +97,8 @@ export default function AdminPostsPage() {
     setDeleteLoading(true)
     try {
       await api.admin.deletePost(deleting.id)
+      // 文章已删除（移入回收站）：清理对应本地草稿，避免残留脏草稿
+      clearPostDraft(deleting.id)
       toast.success(`已将「${deleting.title}」移入回收站`)
       setDeleting(null)
       load()

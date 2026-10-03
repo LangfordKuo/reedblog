@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Link, useParams } from "react-router-dom"
 import { ArrowLeftIcon, ExternalLinkIcon, Link2Icon } from "lucide-react"
 
@@ -25,6 +25,8 @@ export default function PageDetailPage() {
   const [page, setPage] = useState<PageDetail | null>(null)
   const [status, setStatus] = useState<Status>("loading")
   const [error, setError] = useState("")
+  /** 正文容器（对后端渲染的 content_html 做图片懒加载后处理） */
+  const contentRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -56,6 +58,17 @@ export default function PageDetailPage() {
     }
   }, [slug])
 
+  // 页面正文是后端渲染的 content_html，Markdown 组件的 img 覆盖覆盖不到：
+  // 渲染后给未标注的 img 补 loading=lazy + decoding=async（已有标注的原样保留）
+  useEffect(() => {
+    const el = contentRef.current
+    if (!el) return
+    for (const img of el.querySelectorAll("img")) {
+      if (!img.hasAttribute("loading")) img.loading = "lazy"
+      if (!img.hasAttribute("decoding")) img.decoding = "async"
+    }
+  }, [page])
+
   if (status === "loading") return <BlockSpinner label="加载页面…" />
 
   if (status !== "ok" || !page) {
@@ -83,6 +96,7 @@ export default function PageDetailPage() {
         <Separator className="my-6" />
         {/* 后端渲染的 HTML（pulldown-cmark + 文章同款钩子管线），prose 排版 */}
         <div
+          ref={contentRef}
           className="prose prose-neutral max-w-none"
           dangerouslySetInnerHTML={{ __html: page.content_html }}
         />
