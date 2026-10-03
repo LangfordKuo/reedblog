@@ -4,7 +4,7 @@
 //!   仅改 excerpt 也算内容变化
 //! - 列表摘要不含 content_md/excerpt（只给 content_chars）；单条 GET 返回完整正文
 //! - restore 把该版本写回文章（含前台立即生效）且修订数 +1，status/置顶不被改动
-//! - 超过 20 条裁剪最旧；删除文章连带清理修订
+//! - 超过 20 条裁剪最旧；软删（移入回收站）保留修订、purge 才连带清理（契约「文章回收站」）
 //! - 无鉴权 401；文章/修订不存在（含跨文章访问修订）404
 
 use reedblog_backend::state::AppState;
@@ -564,7 +564,7 @@ async fn retention_keeps_latest_20() {
     );
 }
 
-// ---------- 5. 删除文章连带清理修订 ----------
+// ---------- 5. 删除文章：软删保留修订，purge 才连带清理（契约「文章回收站」） ----------
 
 #[tokio::test(flavor = "multi_thread")]
 async fn deleting_post_cascades_revisions() {
@@ -586,6 +586,7 @@ async fn deleting_post_cascades_revisions() {
     let url = sqlite_url_from_config(config_path.to_str().unwrap());
     assert_eq!(db_count_revisions(&url, id).await, 1, "删除前应有初始修订");
 
+    // 软删（DELETE = 移入回收站）：修订原样保留（恢复后还在），回收站中修订接口 404
     let (s, _) = json_req(
         &c,
         "DELETE",
@@ -594,9 +595,22 @@ async fn deleting_post_cascades_revisions() {
         None,
     )
     .await;
-    assert_eq!(s, 204, "删除文章应 204");
+    assert_eq!(s, 204, "移入回收站应 204");
+    assert_eq!(db_count_revisions(&url, id).await, 1, "软删不得清理修订");
+    let (s, _) = list_revisions(&c, &base, Some(&token), id).await;
+    assert_eq!(s, 404, "回收站中的文章修订列表应 404");
 
-    assert_eq!(db_count_revisions(&url, id).await, 0, "删除文章应连带清理修订");
+    // 彻底删除（purge）：才连带清理修订
+    let (s, _) = json_req(
+        &c,
+        "DELETE",
+        &format!("{base}/api/admin/posts/{id}/purge"),
+        Some(&token),
+        None,
+    )
+    .await;
+    assert_eq!(s, 204, "彻底删除应 204");
+    assert_eq!(db_count_revisions(&url, id).await, 0, "purge 应连带清理修订");
     let (s, _) = list_revisions(&c, &base, Some(&token), id).await;
     assert_eq!(s, 404, "文章不存在后修订列表应 404");
 }

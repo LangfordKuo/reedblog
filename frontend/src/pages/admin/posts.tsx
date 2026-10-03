@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { Link, useNavigate, useSearchParams } from "react-router-dom"
 import {
+  ArchiveIcon,
   EyeIcon,
   ExternalLinkIcon,
   HeartIcon,
@@ -89,12 +90,13 @@ export default function AdminPostsPage() {
     }
   }
 
+  // 契约「文章回收站」条款：删除改为移入回收站（软删除，可在回收站恢复）
   const handleDelete = async () => {
     if (!deleting) return
     setDeleteLoading(true)
     try {
       await api.admin.deletePost(deleting.id)
-      toast.success(`已删除「${deleting.title}」`)
+      toast.success(`已将「${deleting.title}」移入回收站`)
       setDeleting(null)
       load()
     } catch (err) {
@@ -112,10 +114,17 @@ export default function AdminPostsPage() {
           <h1 className="text-xl font-bold">文章管理</h1>
           <p className="text-sm text-muted-foreground">共 {data?.total ?? 0} 篇文章</p>
         </div>
-        <Button onClick={() => navigate("/admin/posts/new")}>
-          <PlusIcon />
-          新建文章
-        </Button>
+        <div className="flex items-center gap-2">
+          {/* 回收站入口（契约「文章回收站」条款）：独立路由 /admin/trash */}
+          <Button variant="outline" onClick={() => navigate("/admin/trash")}>
+            <ArchiveIcon />
+            回收站
+          </Button>
+          <Button onClick={() => navigate("/admin/posts/new")}>
+            <PlusIcon />
+            新建文章
+          </Button>
+        </div>
       </div>
 
       <Tabs
@@ -254,7 +263,8 @@ export default function AdminPostsPage() {
                         <Button
                           variant="ghost"
                           size="icon"
-                          aria-label="删除"
+                          aria-label="移入回收站"
+                          title="移入回收站"
                           className="text-destructive hover:text-destructive"
                           onClick={() => setDeleting(post)}
                         >
@@ -282,8 +292,9 @@ export default function AdminPostsPage() {
       <ConfirmDialog
         open={deleting !== null}
         onOpenChange={(o) => !o && setDeleting(null)}
-        title="删除文章"
-        description={`确定删除「${deleting?.title}」吗？此操作不可撤销。`}
+        title="移入回收站"
+        description={`确定将「${deleting?.title}」移入回收站吗？移入后前台不再显示，之后可在回收站恢复或彻底删除。`}
+        confirmText="移入回收站"
         loading={deleteLoading}
         onConfirm={handleDelete}
       />

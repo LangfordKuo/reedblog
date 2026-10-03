@@ -19,6 +19,7 @@ import AdminPostsPage from "@/pages/admin/posts"
 import AdminSettingsPage from "@/pages/admin/settings"
 import AdminTagsPage from "@/pages/admin/tags"
 import AdminThemeSettingsPage from "@/pages/admin/theme-settings"
+import AdminTrashPage from "@/pages/admin/trash"
 import AdminThemesPage from "@/pages/admin/themes"
 import ArchivePage from "@/pages/archive"
 import ArchiveMonthPage from "@/pages/archive-month"
@@ -64,6 +65,8 @@ export default function App() {
               <Route path="posts" element={<AdminPostsPage />} />
               <Route path="posts/new" element={<AdminPostEditPage />} />
               <Route path="posts/:id/edit" element={<AdminPostEditPage />} />
+              {/* 文章回收站（契约「文章回收站」条款）：列表/恢复/彻底删除 */}
+              <Route path="trash" element={<AdminTrashPage />} />
               <Route path="pages" element={<AdminPagesPage />} />
               <Route path="pages/new" element={<AdminPageEditPage />} />
               <Route path="pages/:id/edit" element={<AdminPageEditPage />} />

@@ -14,13 +14,25 @@ use crate::state::AppState;
 /// 同一连接上取自增 id（re-export，命名更明确）
 pub use crate::state::last_insert_id as last_insert_id_on;
 
-/// 文章公开可见性条件（契约「文章置顶与定时发布」条款，惰性定时发布）：
-/// published 恒可见；scheduled 到点（published_at <= :now）即可见。
+/// 「未删除」条件（契约「文章回收站」条款，2026-10-04 新增）：表别名固定 `p`。
+/// 这是「不在回收站」的**唯一实现**：除回收站专用查询（TRASHED_POST_SQL）外，
+/// 任何需要排除回收站文章的查询都必须引用本常量或 VISIBLE_POST_SQL，
+/// **禁止在任何调用点手写 `deleted_at IS NULL`**。
+pub const NOT_DELETED_SQL: &str = "p.deleted_at IS NULL";
+
+/// 「已在回收站」条件（管理端回收站列表/恢复/purge 的存在性判断用）：表别名固定 `p`。
+/// 与 NOT_DELETED_SQL 互为反面，同样禁止在调用点手写字面量。
+pub const TRASHED_POST_SQL: &str = "p.deleted_at IS NOT NULL";
+
+/// 文章公开可见性条件（契约「文章置顶与定时发布」「文章回收站」条款，惰性定时发布）：
+/// published 恒可见；scheduled 到点（published_at <= :now）即可见；
+/// **回收站文章（deleted_at 非 NULL）一律不可见**——即「原可见性条件 AND NOT_DELETED_SQL」。
 /// 占位符必须绑定 `state::now_rfc3339()` 产出的 RFC3339 UTC 字符串——全库时间戳
 /// 字典序即时间序，SQLite/MySQL 共用同一份 SQL；published_at 为 NULL 时比较结果
 /// 为 NULL，该行自然排除。表别名固定为 `p`（所有公开/计数查询统一用 posts p）。
-pub const VISIBLE_POST_SQL: &str =
-    "(p.status = 'published' OR (p.status = 'scheduled' AND p.published_at <= ?))";
+/// 本常量是回收站可见性的唯一实现（单元测试守护其内含 NOT_DELETED_SQL）。
+pub const VISIBLE_POST_SQL: &str = "(p.status = 'published' OR \
+     (p.status = 'scheduled' AND p.published_at <= ?)) AND p.deleted_at IS NULL";
 
 /// 管理接口统一鉴权：Bearer token 校验，失败 → 401 unauthorized
 pub async fn check_auth(state: &AppState, headers: &HeaderMap) -> ApiResult<()> {
@@ -881,6 +893,23 @@ pub fn row_to_comment_pub(r: &sqlx::any::AnyRow) -> CommentPub {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---------- 可见性谓词（契约「文章回收站」：唯一实现，禁止调用点手写） ----------
+
+    #[test]
+    fn visible_sql_is_only_place_with_deleted_guard() {
+        // 可见性谓词必须内含 NOT_DELETED_SQL（回收站文章不可见），且占位符仍恰为 1 个
+        //（调用方绑定 now_rfc3339 —— 扩展 deleted_at 条件不得引入新占位符）
+        assert!(
+            VISIBLE_POST_SQL.contains(NOT_DELETED_SQL),
+            "VISIBLE_POST_SQL 必须内含 NOT_DELETED_SQL：{VISIBLE_POST_SQL}"
+        );
+        assert_eq!(VISIBLE_POST_SQL.matches('?').count(), 1);
+        // 三个常量互不矛盾：未删除/回收站互斥，可见性谓词不含 IS NOT NULL
+        assert!(!VISIBLE_POST_SQL.contains("IS NOT NULL"));
+        assert!(TRASHED_POST_SQL.contains("p.deleted_at IS NOT NULL"));
+        assert_eq!(NOT_DELETED_SQL, "p.deleted_at IS NULL");
+    }
 
     /// 契约场景：含标题/代码块/表格/链接/列表的 markdown 输入
     /// → 输出无 #、`、|、**、[] 等符号且 ≤200 字符

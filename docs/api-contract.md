@@ -30,6 +30,8 @@ PostAdmin    = {id, title, slug, content_md, excerpt,
                 published_at|null,   // status=scheduled 时即计划发布时间（RFC3339 UTC）
                 is_sticky: bool,
                 view_count: int, likes: int,  // 2026-10-04 新增（后台只读展示）
+                deleted_at: string|null,  // 2026-10-04 回收站新增：NULL=正常，非 NULL=在回收站
+                                          // （RFC3339 UTC，即移入回收站时刻；见「文章回收站」）
                 created_at, updated_at}
 Category     = {id, name, post_count}
 Tag          = {id, name, post_count}
@@ -72,6 +74,8 @@ SiteStats      = {post_count: int, comment_count: int, installed_at: string,
                // 安装时间（users 表最早 created_at，RFC3339；取不到时为空串）——站点信息组件数据源
                // 2026-10-04 浏览量新增：total_views = 所有文章 view_count 之和（posts 全表
                // SUM，含草稿——历史累计口径），见「浏览量与点赞」
+               // 2026-10-04 回收站调整：post_count 排除回收站文章（与公开可见性同口径）；
+               // total_views 仍为全表 SUM（含回收站），见「文章回收站」
 WidgetPosition = "sidebar" | "left" | "right" | "footer"   // 规范位置枚举（校验范围）
 WidgetKind     = "builtin" | "custom"                      // builtin=前端内置 React 组件；custom=HTML 片段
 WidgetSource   = "builtin" | "theme" | "admin"             // 组件来源：内置 / 主题声明 / 后台自建
@@ -102,12 +106,15 @@ SmtpSettingsAdmin = {enabled: bool, host, port: int, username, from_name, from_e
 
 ## 站点公开接口（已安装后可用）
 
-**公开可见性（2026-10-03 定时发布新增，惰性发布方案）**：所有公开查询（文章列表/详情/标签/
-分类/归档/搜索/RSS/sitemap/评论目标可见性）中文章的可见条件统一为
-`(status='published' OR (status='scheduled' AND published_at <= :now))`——scheduled 文章
-到点自动可见，**无后台定时器、无需重启**；`:now` 由后端在每次请求时以 RFC3339 UTC 字符串
-传入（全库时间戳字典序即时间序，SQLite/MySQL 共用同一份 SQL）。计数类逻辑（分类/标签
-post_count、站点统计 SiteStats.post_count、归档计数）同口径。详见「文章置顶与定时发布」。
+**公开可见性（2026-10-03 定时发布新增，惰性发布方案；2026-10-04 回收站扩展）**：所有公开
+查询（文章列表/详情/标签/分类/归档/搜索/RSS/sitemap/相关文章/上一篇下一篇/评论目标可见性/
+点赞/站点统计）中文章的可见条件统一为
+`(status='published' OR (status='scheduled' AND published_at <= :now)) AND deleted_at IS NULL`
+——前半段：scheduled 文章到点自动可见，**无后台定时器、无需重启**；`:now` 由后端在每次
+请求时以 RFC3339 UTC 字符串传入（全库时间戳字典序即时间序，SQLite/MySQL 共用同一份 SQL）。
+后半段：**回收站文章（deleted_at 非 NULL）一律不可见、不计入任何计数**，即使 scheduled
+已到点也不可见（见「文章回收站」）。计数类逻辑（分类/标签 post_count、站点统计
+SiteStats.post_count、归档计数）同口径。详见「文章置顶与定时发布」「文章回收站」。
 
 - `GET /api/site` → `SiteInfo`（title/subtitle 与站点设置一致，见「站点设置」）
 - `GET /api/posts?page&per_page&tag=<name>&category=<name>&year=<int>&month=<int>&order=<recent|hot>` → 分页 `[PostPublic]`，仅公开可见（见上）；列表不含 content_md；**列表接口不产生浏览量计数**（见「浏览量与点赞」）
@@ -485,7 +492,9 @@ docs/extensibility-contract.md「主题组件」与 docs/theme-development.md「
 - 形状：`PostDetail` 与 `PostPublic` 列表都带 `likes`（点赞总数，post_likes 子查询
   计数——文章量小，双方言性能可接受）；`PostAdmin` 亦含 `view_count`/`likes`
   （后台列表只读展示，**不做管理点赞**）
-- 删除文章连带删除其 post_likes 行（`DELETE /api/admin/posts/:id` 清理范围扩展）
+- 删除文章的处理（2026-10-04 回收站调整）：`DELETE /api/admin/posts/:id` 改为移入回收站，
+  **不动** post_likes；`DELETE /api/admin/posts/:id/purge` 彻底删除时才连带清理 post_likes
+  （见「文章回收站」）
 - 前端交互约定：详情页点赞按钮（心形图标 + 数字），点击乐观更新 + scale 弹跳动画，
   已赞态高亮，再点取消；localStorage 记住匿名 id
 
@@ -562,7 +571,9 @@ docs/extensibility-contract.md「主题组件」与 docs/theme-development.md「
     - **同时再插入一条新修订**（保存后内容 = 该修订内容，即回滚本身也留痕）并执行 20 条裁剪；
       写回 + 插图修订在**同一事务**内完成
     - 文章不存在 / 修订不存在或不属于该文章 → 404 `not_found`
-- `DELETE /api/admin/posts/:id` 连带删除该文章的全部修订（与既有点赞/评论/标签清理同风格）
+- 删除文章的处理（2026-10-04 回收站调整）：软删（`DELETE /api/admin/posts/:id`）**保留**
+  全部修订（恢复后原样还在，回收站中修订接口 404——需先恢复文章）；`purge` 彻底删除时
+  才连带清理修订（与点赞/评论/标签清理同风格，见「文章回收站」）
 - 实现约束：SQLite/MySQL 共用一份 SQL（裁剪的 `DELETE` 子查询用派生表包一层，规避 MySQL
   「不能在语句的子查询里直接读目标表」限制）；`content_chars` 由后端对 content_md 按
   **Unicode 字符**计数（不依赖双方言 `LENGTH` 的字节/字符差异）
@@ -571,14 +582,83 @@ docs/extensibility-contract.md「主题组件」与 docs/theme-development.md「
   **不引入新依赖**；「恢复此版本」需二次确认，提示「会覆盖当前内容，同时生成一条新修订」；
   恢复成功后回填编辑器并刷新列表（历史里能看到新条目）。配色走现有主题 token，暗色模式正常
 
+## 文章回收站（软删除，2026-10-04 新增）
+
+文章删除改为**软删除**：`DELETE` 移入回收站（`posts.deleted_at` 置为当前时间），可恢复；
+只有 **purge（彻底删除）** 才真正清理数据。**回收站文章对前台完全不可见**。
+
+### 存储与可见性谓词（唯一实现）
+- `posts` 表新增 `deleted_at`（TEXT/VARCHAR(40) NULL，RFC3339 UTC：NULL=正常、非 NULL=在
+  回收站）；SQLite/MySQL 各一份 migration（ADD COLUMN 双方言均可，对已有安装幂等，旧行自动 NULL）
+- **唯一实现**：`backend/src/handlers/helpers.rs` 的 `VISIBLE_POST_SQL` 扩展为
+  「原可见性条件 **AND** `p.deleted_at IS NULL`」；同处导出 `NOT_DELETED_SQL`
+  （`p.deleted_at IS NULL`）与 `TRASHED_POST_SQL`（`p.deleted_at IS NOT NULL`）两个常量。
+  **禁止在任何调用点手写 `deleted_at IS NULL`**；所有公开/计数查询（含 admin 侧同类计数）
+  必须继续引用 `VISIBLE_POST_SQL`（表别名固定 `p`，`?` 仍只绑定 `now_rfc3339()`）
+- **受影响的公开读路径**（逐条均改为扩展后的谓词；回收站文章 404 或不计入）：
+  1. `GET /api/posts`（列表 + total，含 tag/category/year/month 过滤与 order=recent|hot）
+  2. `GET /api/posts/:slug`（详情 → 404）
+  3. `GET /api/search`（搜索 + total）
+  4. `GET /api/archive`（归档计数；scheduled 到点后同样须未删除才计入）
+  5. `GET /api/tags`、`GET /api/categories`（post_count）
+  6. `GET /api/feed.xml`（RSS item）
+  7. `GET /api/sitemap.xml`（文章 URL）
+  8. `GET /api/posts/:slug/related`（目标文章 404 + 候选文章排除）
+  9. `GET /api/posts/:slug` 的 `prev_post`/`next_post` 相邻查询（回收站文章不作相邻项）
+  10. 评论目标可见性（`GET/POST /api/posts/:slug/comments` → 404）
+  11. 点赞三接口（`GET/POST/DELETE /api/posts/:slug/like` → 404）
+  12. `GET /api/site/stats` 的 `post_count`
+  13. 浏览量计数点（详情 404 在前，回收站文章不会命中 `UPDATE view_count`）
+- 管理端同类计数（`GET /api/admin/categories`、`PUT /api/admin/categories/:id`、
+  `GET /api/admin/tags`、`PUT /api/admin/tags/:id` 的 post_count）与公开口径一致（同一常量）
+
+### 语义
+- **slug 占用**：回收站文章**继续占用其 slug**（`slug_taken` 不排除回收站）——软删期间
+  新建同 slug 文章仍 409 `slug_taken`；**purge 后才释放**
+- **级联**：软删与恢复**不触碰**评论、点赞、标签关联与修订历史（恢复后原样还在）；
+  只有 **purge** 才清理 `comments`（`target_type='post'`）、`post_likes`、
+  `post_revisions`、`post_tags` 与文章行
+- **回收站里不发布**：scheduled 文章进回收站后不出现在任何公开路径，**即使到点也不可见**；
+  恢复后若计划时间已到则立即可见（惰性可见性不变）
+- **只影响 deleted_at**：软删/恢复不修改文章内容、`status`、`published_at`、`is_sticky`、
+  `category_id` 与标签关联，也不更新 `updated_at`
+- **管理端行为**：`GET /api/admin/posts`（含 status 筛选）**默认只返回未删除文章**；
+  `GET/PUT /api/admin/posts/:id`、`PATCH /:id/sticky` 与修订历史三接口对回收站文章一律
+  404 `not_found`（回收站中的文章需先恢复才能继续编辑/回滚）；只有回收站列表、restore、
+  purge 能访问回收站文章
+- `PostAdmin` 新增 `deleted_at: string|null`（正常文章为 null）
+- `SiteStats.total_views` 仍为 posts 全表 SUM（含回收站，历史累计口径）；其余统计
+  （post_count、分类/标签 post_count、归档计数）均已排除回收站
+
+### 管理接口（全部需要 Bearer；未登录/token 无效 → 401 `unauthorized`）
+- `DELETE /api/admin/posts/:id` → **204，移入回收站**（仅设置 deleted_at，不清理任何关联
+  数据）；id 不存在或已在回收站 → 404 `not_found`
+- `POST /api/admin/posts/:id/restore` → 200 `PostAdmin`（`deleted_at` 清回 NULL）；
+  不存在或不在回收站 → 404 `not_found`
+- `DELETE /api/admin/posts/:id/purge` → 204，**彻底删除**（同一事务内清理该文章的
+  评论/点赞/修订/标签关联与文章行；slug 随之释放）；**只能对已在回收站的文章执行**——
+  不在回收站（含不存在）→ 404 `not_found`（防误操作，删除需先移入回收站）
+- `GET /api/admin/posts/trash?page&per_page` → 分页 `[PostAdmin]`（复用总则分页壳），
+  仅回收站文章，按 `deleted_at DESC, id DESC`（时间戳秒精度，id 兜底确定性）
+
+### 前端渲染约定
+- 后台文章管理页删除按钮为「移入回收站」，确认文案说明「可在回收站恢复」；页头提供
+  「回收站」入口（独立路由 `/admin/trash`）
+- 回收站页：列出回收站文章（标题/slug/原状态/删除时间），行内「恢复」与「彻底删除」；
+  彻底删除需**二次确认**，文案明确「彻底删除不可恢复，评论与点赞也会一并删除」；
+  恢复无需二次确认；空态与既有后台一致
+- 配色走现有主题 token，暗色模式正常，**不引入新依赖、无新硬编码颜色**
+
 ## 鉴权
 - `POST /api/auth/login` body `{username, password}` → 200 `AuthResult`；错误 → 401 `invalid_credentials`
 - `GET /api/auth/me`（Bearer）→ `{"username"}`；无效/过期 → 401 `unauthorized`
 - JWT HS256，有效期 7 天，secret 来自 config.toml
 
 ## 管理接口（全部需要 Bearer）
-文章（2026-10-03 置顶与定时发布扩展，完整规则见「文章置顶与定时发布」）：
+文章（2026-10-03 置顶与定时发布扩展；2026-10-04 回收站扩展，完整规则见「文章置顶与定时发布」
+「文章回收站」）：
 - `GET /api/admin/posts?status=<draft|published|scheduled|all>&page&per_page` → 分页 `[PostAdmin]`，updated_at DESC
+  - **只返回未删除文章**（回收站文章走 `GET /api/admin/posts/trash`，见「文章回收站」）
   - status 过滤支持 `scheduled`（定时发布）；`all`（缺省）含全部三种状态；非法值 → 422 `validation_error`
 - `POST /api/admin/posts` → 201 `PostAdmin`
   - body: `{title, slug?, content_md, excerpt?, category_id?, tag_ids?: [int], status,
@@ -588,8 +668,8 @@ docs/extensibility-contract.md「主题组件」与 docs/theme-development.md「
   - status=scheduled 时 published_at 必填且必须是未来时间（RFC3339；写入时归一化为
     UTC 秒精度），否则 → 422 `validation_error`
   - is_sticky 可选（缺省 false）
-- `GET /api/admin/posts/:id` → `PostAdmin`
-- `PUT /api/admin/posts/:id` → `PostAdmin`（同 POST body，字段可选更新；draft→published 时若
+- `GET /api/admin/posts/:id` → `PostAdmin`（回收站文章 → 404，见「文章回收站」）
+- `PUT /api/admin/posts/:id` → `PostAdmin`（同 POST body，字段可选更新；回收站文章 → 404；draft→published 时若
   published_at 为空则写入；scheduled→published 为「立即发布」，published_at 改写为当前时间；
   published→scheduled 拒绝 → 422；scheduled→draft 清空 published_at；其余状态转换规则与
   published_at/is_sticky 语义见「文章置顶与定时发布」）
@@ -600,7 +680,13 @@ docs/extensibility-contract.md「主题组件」与 docs/theme-development.md「
 - `GET /api/admin/posts/:id/revisions/:rev_id` → `PostRevision`
 - `POST /api/admin/posts/:id/revisions/:rev_id/restore` → `PostAdmin`
   （以上三条完整规则见「文章修订历史」）
-- `DELETE /api/admin/posts/:id` → 204（2026-10-04 修订历史新增：**连带删除该文章的全部修订**）
+- `DELETE /api/admin/posts/:id` → 204（2026-10-04 回收站调整：**移入回收站（软删除）**，
+  仅设置 `deleted_at`，不清理评论/点赞/修订/标签；已在回收站 → 404；见「文章回收站」）
+- `POST /api/admin/posts/:id/restore` → 200 `PostAdmin`（从回收站恢复；不在回收站 → 404）
+- `DELETE /api/admin/posts/:id/purge` → 204（**彻底删除**，仅限已在回收站的文章，否则 404；
+  同一事务内清理评论/点赞/修订/标签关联与文章行，slug 释放；见「文章回收站」）
+- `GET /api/admin/posts/trash?page&per_page` → 分页 `[PostAdmin]`，仅回收站文章，
+  按 `deleted_at DESC, id DESC`；条目 `deleted_at` 非 null（见「文章回收站」）
 
 分类/标签：
 - `GET /api/admin/categories` → `[Category]`；`POST` body `{name}` → 201；`PUT /:id`；`DELETE /:id` → 204（分类下有文章时 409 `in_use`）

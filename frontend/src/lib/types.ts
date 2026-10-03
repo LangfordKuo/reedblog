@@ -132,6 +132,8 @@ export interface PostAdmin {
   view_count: number
   /** 点赞总数（后台只读展示，不做管理点赞） */
   likes: number
+  /** 移入回收站的时刻（RFC3339 UTC；null=正常，非 null=在回收站。契约「文章回收站」条款） */
+  deleted_at: string | null
   created_at: string
   updated_at: string
 }

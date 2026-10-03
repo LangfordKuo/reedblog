@@ -503,7 +503,7 @@ async fn like_gate_and_delete_cascade() {
         .unwrap();
     assert_eq!(r.status(), 503);
 
-    // 已安装：点赞后删文 → post_likes 行连带清理（直连 SQLite 校验）
+    // 已安装：点赞后删文（契约「文章回收站」：DELETE=软删，保留点赞；purge 才连带清理）
     let tmp = tempfile::tempdir().unwrap();
     let config_path = tmp.path().join("config.toml");
     let base = spawn_server(config_path.to_str().unwrap()).await;
@@ -530,7 +530,7 @@ async fn like_gate_and_delete_cascade() {
     assert_eq!(v["likes"], 1, "PostAdmin.likes");
     assert!(v.get("view_count").is_some(), "PostAdmin.view_count");
 
-    // 删除文章 → 204
+    // 移入回收站（软删）→ 204：点赞原样保留（恢复后还在）
     let r = c
         .delete(format!("{base}/api/admin/posts/{id}"))
         .bearer_auth(&token)
@@ -539,7 +539,7 @@ async fn like_gate_and_delete_cascade() {
         .unwrap();
     assert_eq!(r.status(), 204);
 
-    // 直连同一 SQLite 库验证 post_likes 已清空（connect_pool 幂等跑迁移）
+    // 直连同一 SQLite 库验证 post_likes 未被软删清理（connect_pool 幂等跑迁移）
     let cfg = reedblog_backend::config::Config::load(&config_path).unwrap();
     let pool = reedblog_backend::state::connect_pool("sqlite", &cfg.db_url().unwrap())
         .await
@@ -549,7 +549,22 @@ async fn like_gate_and_delete_cascade() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(n, 0, "删文应连带删除 post_likes 行");
+    assert_eq!(n, 1, "软删不得清理 post_likes 行");
+
+    // 彻底删除（purge，仅限回收站）→ 204：post_likes 才连带清空
+    let r = c
+        .delete(format!("{base}/api/admin/posts/{id}/purge"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 204);
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM post_likes WHERE post_id = ?")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(n, 0, "purge 应连带删除 post_likes 行");
 }
 
 // ---------- 5. stats.total_views ----------

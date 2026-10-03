@@ -247,7 +247,13 @@ export const api = {
     // 行内快捷置顶/取消置顶（契约「文章置顶与定时发布」条款）
     setPostSticky: (id: number, isSticky: boolean) =>
       request<PostAdmin>("PATCH", `/admin/posts/${id}/sticky`, { is_sticky: isSticky }),
+    // 契约「文章回收站」条款：DELETE 为移入回收站（软删除，204）；回收站列表/恢复/彻底删除
     deletePost: (id: number) => request<void>("DELETE", `/admin/posts/${id}`),
+    trashPosts: (q: { page?: number; per_page?: number } = {}) =>
+      request<Page<PostAdmin>>("GET", `/admin/posts/trash${qs(q)}`),
+    restorePost: (id: number) =>
+      request<PostAdmin>("POST", `/admin/posts/${id}/restore`),
+    purgePost: (id: number) => request<void>("DELETE", `/admin/posts/${id}/purge`),
 
     // 修订历史（契约「文章修订历史」条款）：列表摘要不含正文；单条完整供差异对比；
     // 恢复写回内容并生成一条新修订（返回 PostAdmin）

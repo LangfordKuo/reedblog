@@ -87,6 +87,9 @@ pub struct PostAdmin {
     pub view_count: i64,
     /// 点赞总数（后台只读展示，不做管理点赞；契约「浏览量与点赞」条款）
     pub likes: i64,
+    /// 移入回收站的时刻（RFC3339 UTC；NULL=正常，非 NULL=在回收站。
+    /// 契约「文章回收站」条款，2026-10-04 新增；回收站列表按此倒序）
+    pub deleted_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

@@ -128,6 +128,17 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
                 .put(admin_posts::admin_update_post)
                 .delete(admin_posts::admin_delete_post),
         )
+        // 文章回收站（契约「文章回收站」条款）：软删见上方 DELETE；下列为回收站列表/
+        // 恢复/彻底删除。静态段 trash 优先于 {id} 参数路由（axum/matchit 静态优先）
+        .route("/admin/posts/trash", get(admin_posts::admin_list_trash))
+        .route(
+            "/admin/posts/{id}/restore",
+            post(admin_posts::admin_restore_post),
+        )
+        .route(
+            "/admin/posts/{id}/purge",
+            axum::routing::delete(admin_posts::admin_purge_post),
+        )
         // 行内快捷置顶/取消置顶（契约「文章置顶与定时发布」条款）
         .route(
             "/admin/posts/{id}/sticky",

@@ -17,13 +17,17 @@ use crate::state::{now_rfc3339, require_pool, AppState};
 
 use super::helpers::{
     check_auth, derive_excerpt, ensure_category_exists, fetch_tag_ids, is_unique_violation,
-    last_insert_id_on, replace_post_tags, slug_taken, slugify, temp_slug,
+    last_insert_id_on, replace_post_tags, slug_taken, slugify, temp_slug, NOT_DELETED_SQL,
+    TRASHED_POST_SQL,
 };
 
 // view_count / likes（契约「浏览量与点赞」条款）：后台只读展示，不做管理点赞；
-// likes 为 post_likes 子查询计数（走 UNIQUE 索引最左前缀，后台列表分页量小可接受）
+// likes 为 post_likes 子查询计数（走 UNIQUE 索引最左前缀，后台列表分页量小可接受）。
+// deleted_at（契约「文章回收站」条款）：NULL=正常，回收站列表按此倒序；load_post_admin
+// 不过滤回收站（restore/purge 需要读取回收站文章），正常后台读写路径走 load_live_post_admin。
 const ADMIN_COLUMNS: &str = "p.id, p.title, p.slug, p.content_md, p.excerpt, p.status, \
      p.category_id, c.name AS category_name, p.published_at, p.is_sticky, p.view_count, \
+     p.deleted_at, \
      (SELECT COUNT(*) FROM post_likes l WHERE l.post_id = p.id) AS likes, \
      p.created_at, p.updated_at";
 
@@ -49,13 +53,27 @@ async fn row_to_post_admin(pool: &AnyPool, r: &AnyRow) -> ApiResult<PostAdmin> {
         is_sticky: row_bool(r, "is_sticky"),
         view_count: r.try_get::<i64, _>("view_count").unwrap_or(0),
         likes: r.try_get::<i64, _>("likes").unwrap_or(0),
+        deleted_at: r.try_get::<Option<String>, _>("deleted_at").unwrap_or(None),
         created_at: r.get::<String, _>("created_at"),
         updated_at: r.get::<String, _>("updated_at"),
     })
 }
 
+/// 按 id 读取文章（**不过滤回收站**）：仅供需要访问回收站文章的路径使用
+/// （创建后回读、restore、purge）；正常后台读写走 load_live_post_admin。
 async fn load_post_admin(pool: &AnyPool, id: i64) -> ApiResult<Option<PostAdmin>> {
     let sql = format!("SELECT {ADMIN_COLUMNS} {ADMIN_FROM} WHERE p.id = ?");
+    let row = sqlx::query(&sql).bind(id).fetch_optional(pool).await?;
+    match row {
+        None => Ok(None),
+        Some(r) => Ok(Some(row_to_post_admin(pool, &r).await?)),
+    }
+}
+
+/// 按 id 读取「未删除」文章（契约「文章回收站」：回收站文章视为不存在 → 调用方 404）。
+/// 单条 GET/PUT、sticky、修订历史等正常后台读写统一走这里。
+async fn load_live_post_admin(pool: &AnyPool, id: i64) -> ApiResult<Option<PostAdmin>> {
+    let sql = format!("SELECT {ADMIN_COLUMNS} {ADMIN_FROM} WHERE p.id = ? AND {NOT_DELETED_SQL}");
     let row = sqlx::query(&sql).bind(id).fetch_optional(pool).await?;
     match row {
         None => Ok(None),
@@ -68,13 +86,16 @@ async fn load_post_admin(pool: &AnyPool, id: i64) -> ApiResult<Option<PostAdmin>
 /// 每篇文章最多保留的修订条数（契约写死的常量，不做配置项）
 const MAX_REVISIONS_PER_POST: i64 = 20;
 
-/// 文章存在性校验（契约「文章修订历史」：文章不存在 → 404）
+/// 文章存在性校验（契约「文章修订历史」：文章不存在 → 404；
+/// 契约「文章回收站」：回收站中的文章同样视为不存在 → 404，需先恢复）
 async fn ensure_post_exists(pool: &AnyPool, id: i64) -> ApiResult<()> {
-    let count: i64 = sqlx::query("SELECT COUNT(*) FROM posts WHERE id = ?")
-        .bind(id)
-        .fetch_one(pool)
-        .await?
-        .get(0);
+    let count: i64 = sqlx::query(&format!(
+        "SELECT COUNT(*) FROM posts p WHERE p.id = ? AND {NOT_DELETED_SQL}"
+    ))
+    .bind(id)
+    .fetch_one(pool)
+    .await?
+    .get(0);
     if count == 0 {
         return Err(ApiError::not_found());
     }
@@ -175,6 +196,7 @@ fn slug_conflict(slug: &str) -> ApiError {
 }
 
 /// GET /api/admin/posts?status=<draft|published|all>&page&per_page → 分页 [PostAdmin]，updated_at DESC
+/// 契约「文章回收站」：默认只返回未删除文章（回收站文章走 GET /api/admin/posts/trash）
 pub async fn admin_list_posts(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -191,11 +213,11 @@ pub async fn admin_list_posts(
         validate_status(&status)?;
         Some(status)
     };
-    let where_sql = if param.is_some() {
-        "WHERE p.status = ?"
-    } else {
-        ""
-    };
+    // 未删除恒为第一条件（NOT_DELETED_SQL 无占位符，绑定顺序不变）
+    let mut where_sql = format!("WHERE {NOT_DELETED_SQL}");
+    if param.is_some() {
+        where_sql.push_str(" AND p.status = ?");
+    }
 
     let count_sql = format!("SELECT COUNT(*) FROM posts p {where_sql}");
     let mut cq = sqlx::query(&count_sql);
@@ -368,7 +390,7 @@ pub async fn admin_create_post(
     Ok((StatusCode::CREATED, Json(post)))
 }
 
-/// GET /api/admin/posts/:id → PostAdmin
+/// GET /api/admin/posts/:id → PostAdmin（契约「文章回收站」：回收站文章 → 404）
 pub async fn admin_get_post(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -376,7 +398,7 @@ pub async fn admin_get_post(
 ) -> ApiResult<Json<PostAdmin>> {
     check_auth(&state, &headers).await?;
     let (pool, _db_type) = require_pool(&state).await?;
-    load_post_admin(&pool, id)
+    load_live_post_admin(&pool, id)
         .await?
         .map(Json)
         .ok_or_else(ApiError::not_found)
@@ -399,7 +421,8 @@ pub async fn admin_update_post(
     check_auth(&state, &headers).await?;
     let Json(body) = req_body.map_err(ApiError::from)?;
     let (pool, _db_type) = require_pool(&state).await?;
-    let existing = load_post_admin(&pool, id)
+    // 契约「文章回收站」：回收站文章不可编辑 → 404（需先恢复）
+    let existing = load_live_post_admin(&pool, id)
         .await?
         .ok_or_else(ApiError::not_found)?;
 
@@ -575,11 +598,14 @@ pub async fn admin_set_sticky(
     let Json(body) = req_body.map_err(ApiError::from)?;
     let (pool, _db_type) = require_pool(&state).await?;
 
-    let count: i64 = sqlx::query("SELECT COUNT(*) FROM posts WHERE id = ?")
-        .bind(id)
-        .fetch_one(&pool)
-        .await?
-        .get(0);
+    // 契约「文章回收站」：回收站文章不可置顶 → 404（需先恢复）
+    let count: i64 = sqlx::query(&format!(
+        "SELECT COUNT(*) FROM posts p WHERE p.id = ? AND {NOT_DELETED_SQL}"
+    ))
+    .bind(id)
+    .fetch_one(&pool)
+    .await?
+    .get(0);
     if count == 0 {
         return Err(ApiError::not_found());
     }
@@ -598,7 +624,27 @@ pub async fn admin_set_sticky(
     Ok(Json(post))
 }
 
-/// DELETE /api/admin/posts/:id → 204（连带清理标签关联、评论、点赞与修订历史）
+// ---------- 文章回收站（软删除，契约「文章回收站」条款，2026-10-04 新增） ----------
+
+/// 在事务连接上判断文章是否处于某状态（`TRASHED_POST_SQL` / `NOT_DELETED_SQL` 二选一）
+async fn post_in_state(
+    conn: &mut sqlx::AnyConnection,
+    id: i64,
+    predicate: &str,
+) -> Result<bool, sqlx::Error> {
+    let count: i64 = sqlx::query(&format!(
+        "SELECT COUNT(*) FROM posts p WHERE p.id = ? AND {predicate}"
+    ))
+    .bind(id)
+    .fetch_one(&mut *conn)
+    .await?
+    .get(0);
+    Ok(count > 0)
+}
+
+/// DELETE /api/admin/posts/:id → 204：**移入回收站（软删除）**（契约「文章回收站」）。
+/// 只设置 deleted_at（不触碰内容/状态/置顶/分类标签，也不更新 updated_at）；
+/// 评论/点赞/修订/标签关联原样保留。id 不存在或已在回收站 → 404 not_found。
 pub async fn admin_delete_post(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -607,39 +653,126 @@ pub async fn admin_delete_post(
     check_auth(&state, &headers).await?;
     let (pool, _db_type) = require_pool(&state).await?;
 
-    let count: i64 = sqlx::query("SELECT COUNT(*) FROM posts WHERE id = ?")
-        .bind(id)
-        .fetch_one(&pool)
-        .await?
-        .get(0);
-    if count == 0 {
+    // 存在性判断 + 置 deleted_at 同一事务（回收站中的文章再删 → 404）
+    let mut tx = pool.begin().await?;
+    if !post_in_state(&mut *tx, id, NOT_DELETED_SQL).await? {
+        tx.rollback().await?;
         return Err(ApiError::not_found());
     }
-
-    sqlx::query("DELETE FROM post_tags WHERE post_id = ?")
+    sqlx::query("UPDATE posts SET deleted_at = ? WHERE id = ?")
+        .bind(now_rfc3339())
         .bind(id)
-        .execute(&pool)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /api/admin/posts/:id/restore → PostAdmin：从回收站恢复（deleted_at 清回 NULL，
+/// 其余字段一律不动）。不存在或不在回收站 → 404 not_found。
+pub async fn admin_restore_post(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<PostAdmin>> {
+    check_auth(&state, &headers).await?;
+    let (pool, _db_type) = require_pool(&state).await?;
+
+    let mut tx = pool.begin().await?;
+    if !post_in_state(&mut *tx, id, TRASHED_POST_SQL).await? {
+        tx.rollback().await?;
+        return Err(ApiError::not_found());
+    }
+    sqlx::query("UPDATE posts SET deleted_at = NULL WHERE id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+
+    let post = load_post_admin(&pool, id)
+        .await?
+        .ok_or_else(|| ApiError::internal("恢复后读取文章失败"))?;
+    Ok(Json(post))
+}
+
+/// DELETE /api/admin/posts/:id/purge → 204：**彻底删除**（契约「文章回收站」）。
+/// 仅限已在回收站的文章（不在回收站含不存在 → 404，防误操作）；同一事务内清理
+/// comments（target_type='post'）/post_likes/post_revisions/post_tags 与文章行，
+/// slug 随之释放。
+pub async fn admin_purge_post(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+) -> ApiResult<StatusCode> {
+    check_auth(&state, &headers).await?;
+    let (pool, _db_type) = require_pool(&state).await?;
+
+    let mut tx = pool.begin().await?;
+    if !post_in_state(&mut *tx, id, TRASHED_POST_SQL).await? {
+        tx.rollback().await?;
+        return Err(ApiError::not_found());
+    }
     // comments.post_id 为通用目标 id（target_type 区分文章/页面），仅删文章评论行
     sqlx::query("DELETE FROM comments WHERE target_type = 'post' AND post_id = ?")
         .bind(id)
-        .execute(&pool)
+        .execute(&mut *tx)
         .await?;
     sqlx::query("DELETE FROM post_likes WHERE post_id = ?")
         .bind(id)
-        .execute(&pool)
+        .execute(&mut *tx)
         .await?;
-    // 修订历史连带清理（契约「文章修订历史」：与点赞/评论清理同风格）
     sqlx::query("DELETE FROM post_revisions WHERE post_id = ?")
         .bind(id)
-        .execute(&pool)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM post_tags WHERE post_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
         .await?;
     sqlx::query("DELETE FROM posts WHERE id = ?")
         .bind(id)
-        .execute(&pool)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// GET /api/admin/posts/trash?page&per_page → 分页 [PostAdmin]（仅回收站文章），
+/// 按 deleted_at DESC, id DESC（时间戳秒精度，id 兜底确定性）。
+pub async fn admin_list_trash(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<AdminPostsQuery>,
+) -> ApiResult<Json<Page<PostAdmin>>> {
+    check_auth(&state, &headers).await?;
+    let (pool, _db_type) = require_pool(&state).await?;
+    let (page, per_page) = normalize_paging(q.page, q.per_page);
+
+    let count_sql = format!("SELECT COUNT(*) FROM posts p WHERE {TRASHED_POST_SQL}");
+    let total: i64 = sqlx::query(&count_sql).fetch_one(&pool).await?.get(0);
+
+    let list_sql = format!(
+        "SELECT {ADMIN_COLUMNS} {ADMIN_FROM} WHERE {TRASHED_POST_SQL} \
+         ORDER BY p.deleted_at DESC, p.id DESC LIMIT ? OFFSET ?"
+    );
+    let rows = sqlx::query(&list_sql)
+        .bind(per_page)
+        .bind((page - 1) * per_page)
+        .fetch_all(&pool)
+        .await?;
+
+    let mut items = Vec::with_capacity(rows.len());
+    for r in &rows {
+        items.push(row_to_post_admin(&pool, r).await?);
+    }
+    Ok(Json(Page {
+        items,
+        total,
+        page,
+        per_page,
+    }))
 }
 
 // ---------- 修订历史管理接口（契约「文章修订历史」条款，2026-10-04 新增） ----------
