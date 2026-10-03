@@ -14,6 +14,15 @@ use serde_json::{json, Value};
 use std::io::Write;
 use std::path::Path;
 
+/// 反滥用限流（契约「反滥用」：同 IP + 同目标 60 秒 1 条）生效后，测试中连续发评论
+/// 需模拟不同访客来源——每个请求分配唯一 XFF，避免命中限流返回 429。
+fn visitor_ip() -> String {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static N: AtomicUsize = AtomicUsize::new(0);
+    let n = N.fetch_add(1, Ordering::Relaxed);
+    format!("10.{}.{}.{}", (n / 62500) % 250, (n / 250) % 250, n % 250)
+}
+
 /// 在 127.0.0.1 随机端口起真实服务；预写 config.toml 把插件/主题目录隔离到 tempdir
 async fn spawn_server(config_path: &str) -> String {
     if !Path::new(config_path).exists() {
@@ -771,6 +780,7 @@ async fn site_stats_and_hot_order() {
     for i in 0..2 {
         let r = c
             .post(format!("{base}/api/posts/{slug_a}/comments"))
+            .header("x-forwarded-for", visitor_ip())
             .json(&json!({"author_name": "路人", "content": format!("评论 {i}")}))
             .send()
             .await

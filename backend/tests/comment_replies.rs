@@ -12,6 +12,15 @@ use serde_json::{json, Value};
 use std::io::Write;
 use std::path::Path;
 
+/// 反滥用限流（契约「反滥用」：同 IP + 同目标 60 秒 1 条）生效后，测试中连续发评论
+/// 需模拟不同访客来源——每个请求分配唯一 XFF，避免命中限流返回 429。
+fn visitor_ip() -> String {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static N: AtomicUsize = AtomicUsize::new(0);
+    let n = N.fetch_add(1, Ordering::Relaxed);
+    format!("10.{}.{}.{}", (n / 62500) % 250, (n / 250) % 250, n % 250)
+}
+
 /// 在 127.0.0.1 随机端口起真实服务（与 integration.rs 同款隔离）
 async fn spawn_server(config_path: &str) -> String {
     if !Path::new(config_path).exists() {
@@ -103,6 +112,7 @@ async fn publish_post(c: &reqwest::Client, base: &str, token: &str, title: &str)
 async fn post_comment(c: &reqwest::Client, base: &str, slug: &str, body: Value) -> Value {
     let r = c
         .post(format!("{base}/api/posts/{slug}/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(&body)
         .send()
         .await
@@ -202,6 +212,7 @@ async fn reply_creation_normalization_and_validation() {
     // 校验：父评论不存在 → 422 validation_error（带明确 message）
     let r = c
         .post(format!("{base}/api/posts/{slug}/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(&json!({"author_name": "x", "content": "y", "parent_id": 99999}))
         .send()
         .await
@@ -211,6 +222,7 @@ async fn reply_creation_normalization_and_validation() {
 
     let r = c
         .post(format!("{base}/api/posts/{slug}/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(&json!({"author_name": "x", "content": "y", "parent_id": 0}))
         .send()
         .await
@@ -229,6 +241,7 @@ async fn reply_creation_normalization_and_validation() {
     .await;
     let r = c
         .post(format!("{base}/api/posts/{slug}/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(&json!({"author_name": "x", "content": "y", "parent_id": other_a["id"]}))
         .send()
         .await
@@ -249,6 +262,7 @@ async fn reply_creation_normalization_and_validation() {
     assert_eq!(r.status(), 200);
     let r = c
         .post(format!("{base}/api/posts/{slug}/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(&json!({"author_name": "x", "content": "y", "parent_id": b_id}))
         .send()
         .await
@@ -440,6 +454,7 @@ async fn guestbook_replies_and_cross_target_type() {
     // 留言板（安装内置页 slug=guestbook）：顶级留言 + 回复 + 回复的回复
     let m = c
         .post(format!("{base}/api/pages/guestbook/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(&json!({"author_name": "访客", "content": "顶级留言"}))
         .send()
         .await
@@ -451,6 +466,7 @@ async fn guestbook_replies_and_cross_target_type() {
 
     let r1 = c
         .post(format!("{base}/api/pages/guestbook/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(&json!({"author_name": "站长", "content": "回复留言", "parent_id": m_id}))
         .send()
         .await
@@ -462,6 +478,7 @@ async fn guestbook_replies_and_cross_target_type() {
 
     let r2 = c
         .post(format!("{base}/api/pages/guestbook/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(&json!({"author_name": "访客", "content": "再回复", "parent_id": r1_id}))
         .send()
         .await
@@ -499,6 +516,7 @@ async fn guestbook_replies_and_cross_target_type() {
     // 在留言板回复文章评论 → 422
     let r = c
         .post(format!("{base}/api/pages/guestbook/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(&json!({"author_name": "x", "content": "y", "parent_id": p_id}))
         .send()
         .await
@@ -509,6 +527,7 @@ async fn guestbook_replies_and_cross_target_type() {
     // 在文章下回复留言板留言 → 422
     let r = c
         .post(format!("{base}/api/posts/cross-post/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(&json!({"author_name": "x", "content": "y", "parent_id": m_id}))
         .send()
         .await
@@ -651,6 +670,7 @@ async fn hook_applies_to_replies_with_normalized_ctx() {
     // 回复 + "ban-reply" → 403 comment_blocked，reason 带归一化后的 ctx 值
     let r = c
         .post(format!("{base}/api/posts/{slug}/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(&json!({"author_name": "乙", "content": "ban-reply 回复", "parent_id": a_id}))
         .send()
         .await
@@ -674,6 +694,7 @@ async fn hook_applies_to_replies_with_normalized_ctx() {
     let b_id = b["id"].as_i64().unwrap();
     let r = c
         .post(format!("{base}/api/posts/{slug}/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(&json!({"author_name": "丙", "content": "ban-reply 深层", "parent_id": b_id}))
         .send()
         .await
@@ -688,6 +709,7 @@ async fn hook_applies_to_replies_with_normalized_ctx() {
     // 留言板留言的回复同样被钩子拦截（同一管线）
     let m = c
         .post(format!("{base}/api/pages/guestbook/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(&json!({"author_name": "访客", "content": "留言"}))
         .send()
         .await
@@ -695,6 +717,7 @@ async fn hook_applies_to_replies_with_normalized_ctx() {
     let m_id = m.json::<Value>().await.unwrap()["id"].as_i64().unwrap();
     let r = c
         .post(format!("{base}/api/pages/guestbook/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(&json!({"author_name": "x", "content": "ban-reply", "parent_id": m_id}))
         .send()
         .await

@@ -26,6 +26,9 @@ export default function AdminSettingsPage() {
   const [perPage, setPerPage] = useState("10")
   const [baseUrl, setBaseUrl] = useState("")
   const [ogImage, setOgImage] = useState("")
+  // 反滥用（契约「反滥用」条款）：仅后台可见，公开接口不返回
+  const [blockedKeywords, setBlockedKeywords] = useState("")
+  const [maxLinks, setMaxLinks] = useState("3")
 
   useEffect(() => {
     document.title = "站点管理 · reedblog"
@@ -40,6 +43,8 @@ export default function AdminSettingsPage() {
         setPerPage(String(s.per_page))
         setBaseUrl(s.base_url)
         setOgImage(s.og_image)
+        setBlockedKeywords(s.comment_blocked_keywords)
+        setMaxLinks(String(s.comment_max_links))
       })
       .catch((e) => setLoadError(errorMessage(e)))
       .finally(() => setLoading(false))
@@ -75,6 +80,11 @@ export default function AdminSettingsPage() {
       toast.error("OG 分享图必须以 /api/uploads/ 或 http://、https:// 开头")
       return
     }
+    const maxLinksNum = Number(maxLinks)
+    if (!Number.isInteger(maxLinksNum) || maxLinksNum < 0 || maxLinksNum > 100) {
+      toast.error("评论链接数上限必须是 0~100 的整数（0=不限制）")
+      return
+    }
 
     setSaving(true)
     try {
@@ -87,6 +97,8 @@ export default function AdminSettingsPage() {
         per_page: perPageNum,
         base_url: baseUrl.trim(),
         og_image: ogImage.trim(),
+        comment_blocked_keywords: blockedKeywords,
+        comment_max_links: maxLinksNum,
       })
       // 回显服务端规范化后的值（trim / base_url 去尾斜杠）
       setTitle(saved.title)
@@ -97,6 +109,8 @@ export default function AdminSettingsPage() {
       setPerPage(String(saved.per_page))
       setBaseUrl(saved.base_url)
       setOgImage(saved.og_image)
+      setBlockedKeywords(saved.comment_blocked_keywords)
+      setMaxLinks(String(saved.comment_max_links))
       // 刷新前台站点设置的模块级缓存（同标签页回前台立即生效）
       loadSiteSettings(true).catch(() => {})
       toast.success("站点设置已保存")
@@ -241,6 +255,48 @@ export default function AdminSettingsPage() {
               <p className="text-xs text-muted-foreground">
                 分享到社媒/聊天工具的卡片兜底图；留空则用文章正文第一张图，都没有时不输出
                 og:image
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">反滥用</CardTitle>
+            <CardDescription>
+              评论与留言的内容校验规则；限流阈值（60 秒 / 10 分钟）为后端固定常量，此处的设置
+              不会出现在任何公开接口
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+            <div className="grid gap-2">
+              <Label htmlFor="comment-blocked-keywords">评论关键词黑名单</Label>
+              <Textarea
+                id="comment-blocked-keywords"
+                value={blockedKeywords}
+                onChange={(e) => setBlockedKeywords(e.target.value)}
+                placeholder={"每行一个关键词，或用逗号分隔（不区分大小写）\n如：加微信\n代开发票"}
+                rows={4}
+                maxLength={2000}
+              />
+              <p className="text-xs text-muted-foreground">
+                命中任一关键词的评论/留言会被拒绝（提示不会指明命中的是哪个词）
+              </p>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="comment-max-links">评论链接数上限</Label>
+              <Input
+                id="comment-max-links"
+                type="number"
+                min={0}
+                max={100}
+                step={1}
+                value={maxLinks}
+                onChange={(e) => setMaxLinks(e.target.value)}
+                className="max-w-[10rem]"
+              />
+              <p className="text-xs text-muted-foreground">
+                正文中 http:// 与 https:// 出现次数的上限（0~100；0 表示不限制，默认 3）
               </p>
             </div>
           </CardContent>

@@ -11,6 +11,15 @@ use reedblog_backend::state::AppState;
 use serde_json::{json, Value};
 use std::path::Path;
 
+/// 反滥用限流（契约「反滥用」：同 IP + 同目标 60 秒 1 条）生效后，测试中连续发评论
+/// 需模拟不同访客来源——每个请求分配唯一 XFF，避免命中限流返回 429。
+fn visitor_ip() -> String {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static N: AtomicUsize = AtomicUsize::new(0);
+    let n = N.fetch_add(1, Ordering::Relaxed);
+    format!("10.{}.{}.{}", (n / 62500) % 250, (n / 250) % 250, n % 250)
+}
+
 /// 在 127.0.0.1 随机端口起真实服务（与 integration.rs 同款隔离）
 async fn spawn_server(config_path: &str) -> String {
     if !Path::new(config_path).exists() {
@@ -116,6 +125,7 @@ async fn pages_endpoints_not_installed_gate() {
     }
     let r = c
         .post(format!("{base}/api/pages/guestbook/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(&json!({"author_name": "a", "content": "b"}))
         .send()
         .await
@@ -599,6 +609,7 @@ async fn guestbook_comment_flow() {
     // 创建留言（先发后审：创建即 approved，公开可见）
     let r = c
         .post(format!("{base}/api/pages/guestbook/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(
             &json!({"author_name": " 访客甲 ", "email": "a@b.com", "content": " 你好，路过留言 "}),
         )
@@ -624,6 +635,7 @@ async fn guestbook_comment_flow() {
     // 校验：author_name/content 必填 → 422
     let r = c
         .post(format!("{base}/api/pages/guestbook/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(&json!({"author_name": "", "content": "x"}))
         .send()
         .await
@@ -632,6 +644,7 @@ async fn guestbook_comment_flow() {
     assert_eq!(err_code(r).await, "validation_error");
     let r = c
         .post(format!("{base}/api/pages/guestbook/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(&json!({"author_name": "a", "content": "  "}))
         .send()
         .await
@@ -641,6 +654,7 @@ async fn guestbook_comment_flow() {
     // 非留言板页（about 是 custom）→ 404；不存在的页 → 404
     let r = c
         .post(format!("{base}/api/pages/about/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(&json!({"author_name": "a", "content": "b"}))
         .send()
         .await
@@ -701,6 +715,7 @@ async fn guestbook_comment_flow() {
     let guestbook_id = find_by_slug(&admin, "guestbook")["id"].as_i64().unwrap();
     let r = c
         .post(format!("{base}/api/posts/reedblog/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(&json!({"author_name": "读者", "content": "文章评论"}))
         .send()
         .await
@@ -959,6 +974,7 @@ async fn delete_page_cascades_comments() {
     // 先给内置留言板挂一条留言，删除自定义页不得误伤它
     let r = c
         .post(format!("{base}/api/pages/guestbook/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(&json!({"author_name": "某人", "content": "留言内容"}))
         .send()
         .await

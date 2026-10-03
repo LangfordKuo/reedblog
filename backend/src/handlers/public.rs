@@ -19,9 +19,10 @@ use crate::state::{now_rfc3339, require_pool, AppState};
 use crate::views::{client_ip, has_bearer, is_bot_ua};
 
 use super::helpers::{
-    create_comment_pipeline, derive_excerpt, escape_like, fetch_post_tags, is_unique_violation,
-    make_snippet, md_to_plain_text, render_markdown, row_to_comment_pub, split_search_terms,
-    PUBLIC_COMMENT_COLUMNS, PUBLIC_COMMENT_FROM, PUBLIC_COMMENT_THREAD_FILTER, VISIBLE_POST_SQL,
+    check_comment_gate, create_comment_pipeline, derive_excerpt, escape_like, fetch_post_tags,
+    honeypot_comment, is_unique_violation, make_snippet, md_to_plain_text, render_markdown,
+    row_to_comment_pub, split_search_terms, CommentGate, PUBLIC_COMMENT_COLUMNS,
+    PUBLIC_COMMENT_FROM, PUBLIC_COMMENT_THREAD_FILTER, VISIBLE_POST_SQL,
 };
 
 /// 把文章行（列表/详情共用列集）转成 PostPublic
@@ -605,6 +606,8 @@ pub async fn list_comments(
 
 /// POST /api/posts/:slug/comments → 201 CommentPub（先发后审：创建即 approved）
 ///
+/// 反滥用闸门（契约「反滥用」条款）：蜜罐（假成功不落库）→ 黑名单/链接数（403
+/// comment_rejected）→ 限流（429 too_many_requests + Retry-After）→ 通过后走下面的管线。
 /// 走评论共用创建管线（helpers::create_comment_pipeline）：body 可选 parent_id
 /// （回复/楼中楼），父评论校验与两级归一化、comment.before_create 钩子链
 /// （block → 403 comment_blocked，ctx 带 parent_id/reply_to_id）见契约「评论回复」条款。
@@ -612,11 +615,35 @@ pub async fn create_comment(
     State(state): State<AppState>,
     Path(slug): Path<String>,
     headers: HeaderMap,
+    // 限流键的直连 IP 兜底来源；测试路径的裸 axum::serve 不提供 ConnectInfo（同 get_post）
+    connect: Result<ConnectInfo<SocketAddr>, axum::extract::rejection::ExtensionRejection>,
     body: ValidJson<CreateCommentRequest>,
 ) -> ApiResult<(StatusCode, Json<CommentPub>)> {
     let Json(req) = body.map_err(ApiError::from)?;
+    let connect = connect.ok();
     let (pool, db_type) = require_pool(&state).await?;
     let post_id = find_published_post(&pool, &slug).await?;
+
+    // 判定顺序固定：蜜罐 → 黑名单/链接数 → 限流 → 正常落库（见 check_comment_gate）
+    let ip = client_ip(&headers, connect.as_ref());
+    match check_comment_gate(
+        &state,
+        &pool,
+        "post",
+        post_id,
+        &ip,
+        req.website.as_deref(),
+        &req.content,
+    )
+    .await?
+    {
+        // 蜜罐命中：201 假成功，不落库、不发通知（邮件通知调用点在下方，天然被短路）
+        CommentGate::Honeypot => {
+            return Ok((StatusCode::CREATED, Json(honeypot_comment(&req))));
+        }
+        CommentGate::Allow => {}
+    }
+
     let created = create_comment_pipeline(
         &state,
         &pool,

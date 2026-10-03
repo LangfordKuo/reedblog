@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { api, errorMessage } from "@/lib/api"
+import { api, ApiError, errorMessage } from "@/lib/api"
 import { formatRelative } from "@/lib/utils"
 import type { CommentPub } from "@/lib/types"
 
@@ -86,8 +86,14 @@ export function CommentSection({
    * 提交评论/回复（主表单与内联回复表单共用）。
    * parentId 传被点击评论的 id 即可——「回复的回复」由后端归一化到同一顶级楼层，
    * 前端按 parent_id 分组后自动落回原楼层。成功返回 true（供回复表单关闭）。
+   * website 为蜜罐字段（契约「反滥用」）：真人为空，机器人自动填充 → 后端 201 假成功；
+   * 429/403 的提示文案固定为友好话术，不回显后端规则细节。
    */
-  const submitComment = async (content: string, parentId?: number): Promise<boolean> => {
+  const submitComment = async (
+    content: string,
+    parentId?: number,
+    website?: string,
+  ): Promise<boolean> => {
     const isReply = parentId !== undefined
     if (!authorName.trim()) {
       toast.error(isReply ? "请先在下方发表表单填写昵称" : "请填写昵称")
@@ -100,6 +106,7 @@ export function CommentSection({
         ...(email.trim() ? { email: email.trim() } : {}),
         content: content.trim(),
         ...(isReply ? { parent_id: parentId } : {}),
+        ...(website ? { website } : {}),
       })
       localStorage.setItem(AUTHOR_KEY, authorName.trim())
       localStorage.setItem(EMAIL_KEY, email.trim())
@@ -108,6 +115,20 @@ export function CommentSection({
       toast.success(isReply ? `回复发表成功` : `${noun}发表成功`)
       return true
     } catch (err) {
+      if (err instanceof ApiError && err.code === "too_many_requests") {
+        // 契约「反滥用」：Retry-After 剩余秒数可用于提示；不暴露阈值规则
+        toast.error(
+          err.retryAfter
+            ? `提交过于频繁，请 ${err.retryAfter} 秒后再试`
+            : "提交过于频繁，请稍后再试",
+        )
+        return false
+      }
+      if (err instanceof ApiError && err.code === "comment_rejected") {
+        // 契约「反滥用」：不透露命中的关键词或规则类型
+        toast.error("内容未通过校验，请修改后重试")
+        return false
+      }
       toast.error(errorMessage(err))
       return false
     }
@@ -162,7 +183,7 @@ export function CommentSection({
         email={email}
         onAuthorNameChange={setAuthorName}
         onEmailChange={setEmail}
-        onSubmit={submitComment}
+        onSubmit={(content, website) => submitComment(content, undefined, website)}
       />
     </section>
   )
@@ -178,7 +199,7 @@ function CommentItem({
   c: CommentPub
   replyOpen: boolean
   onReply: () => void
-  onSubmit: (content: string, parentId?: number) => Promise<boolean>
+  onSubmit: (content: string, parentId: number | undefined, website: string) => Promise<boolean>
 }) {
   return (
     <div className="flex gap-3">
@@ -213,11 +234,43 @@ function CommentItem({
         {replyOpen && (
           <ReplyForm
             replyToName={c.author_name}
-            onSubmit={(content) => onSubmit(content, c.id)}
+            onSubmit={(content, website) => onSubmit(content, c.id, website)}
             onCancel={onReply}
           />
         )}
       </div>
+    </div>
+  )
+}
+
+/**
+ * 蜜罐输入（契约「反滥用」条款）：对真人不可见、不可聚焦，机器人自动填充后会被
+ * 后端识别（201 假成功但不落库）。用绝对定位移出视口 + opacity:0——**不用
+ * display:none**（太容易被简单识别）；tabIndex={-1} 移出 Tab 序列、aria-hidden
+ * 对读屏器隐藏，且不配 <label>（真人不该感知到它的存在）。
+ */
+function HoneypotField({
+  value,
+  onChange,
+}: {
+  value: string
+  onChange: (v: string) => void
+}) {
+  return (
+    <div
+      className="absolute -left-[9999px] top-0 h-px w-px overflow-hidden opacity-0"
+      aria-hidden="true"
+    >
+      <input
+        type="text"
+        name="website"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        tabIndex={-1}
+        autoComplete="off"
+        aria-hidden="true"
+        className="opacity-0"
+      />
     </div>
   )
 }
@@ -229,10 +282,11 @@ function ReplyForm({
   onCancel,
 }: {
   replyToName: string
-  onSubmit: (content: string) => Promise<boolean>
+  onSubmit: (content: string, website: string) => Promise<boolean>
   onCancel: () => void
 }) {
   const [content, setContent] = useState("")
+  const [website, setWebsite] = useState("")
   const [submitting, setSubmitting] = useState(false)
 
   const handleSubmit = async (e: FormEvent) => {
@@ -243,7 +297,7 @@ function ReplyForm({
     }
     setSubmitting(true)
     try {
-      await onSubmit(content)
+      await onSubmit(content, website)
     } finally {
       setSubmitting(false)
     }
@@ -252,8 +306,9 @@ function ReplyForm({
   return (
     <form
       onSubmit={handleSubmit}
-      className="mt-2 flex flex-col gap-3 rounded-lg border bg-muted/30 p-3"
+      className="relative mt-2 flex flex-col gap-3 rounded-lg border bg-muted/30 p-3"
     >
+      <HoneypotField value={website} onChange={setWebsite} />
       <Textarea
         value={content}
         onChange={(e) => setContent(e.target.value)}
@@ -289,9 +344,10 @@ function CommentForm({
   email: string
   onAuthorNameChange: (v: string) => void
   onEmailChange: (v: string) => void
-  onSubmit: (content: string) => Promise<boolean>
+  onSubmit: (content: string, website: string) => Promise<boolean>
 }) {
   const [content, setContent] = useState("")
+  const [website, setWebsite] = useState("")
   const [submitting, setSubmitting] = useState(false)
 
   const handleSubmit = async (e: FormEvent) => {
@@ -302,7 +358,7 @@ function CommentForm({
     }
     setSubmitting(true)
     try {
-      if (await onSubmit(content)) setContent("")
+      if (await onSubmit(content, website)) setContent("")
     } finally {
       setSubmitting(false)
     }
@@ -311,8 +367,9 @@ function CommentForm({
   return (
     <form
       onSubmit={handleSubmit}
-      className="flex flex-col gap-4 rounded-lg border bg-card p-4 sm:p-5"
+      className="relative flex flex-col gap-4 rounded-lg border bg-card p-4 sm:p-5"
     >
+      <HoneypotField value={website} onChange={setWebsite} />
       <h3 className="text-sm font-medium">发表{noun}</h3>
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="grid gap-1.5">

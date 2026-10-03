@@ -68,7 +68,11 @@ PostRevision        = PostRevisionSummary + {content_md, excerpt}
                // 单条完整修订（含正文，供前端差异对比）
 SiteSettingsPublic = {title, subtitle, description, icp_number, footer_text, per_page: int,
                       og_image: string}   // og_image：2026-10-04 SEO 条款新增，空串=未设置
-SiteSettingsAdmin  = SiteSettingsPublic + {base_url}   // base_url 为敏感字段，公开接口不返回
+SiteSettingsAdmin  = SiteSettingsPublic + {base_url,
+                      comment_blocked_keywords: string, comment_max_links: int}
+               // base_url 为敏感字段，公开接口不返回；
+               // 2026-10-04 反滥用新增：评论关键词黑名单与链接数上限**仅后台可读**，
+               // SiteSettingsPublic 绝不返回这两项（见「反滥用」）
 SiteStats      = {post_count: int, comment_count: int, installed_at: string,
                   total_views: int}
                // 2026-10-03 组件系统新增：published 文章数 / approved 评论数（含页面留言）/
@@ -154,9 +158,10 @@ SiteStats.post_count、归档计数）同口径。详见「文章置顶与定时
   仍为平铺数组，两级树由前端按 parent_id 自行组装，见「评论回复」）
   - 评论目标可见性同文章：文章未公开可见（含未到点的 scheduled）→ 404 `not_found`
 - `POST /api/posts/:slug/comments` → 201 `CommentPub`
-  - body: `{author_name, email?, content, parent_id?}`；必填校验 422 `validation_error`
+  - body: `{author_name, email?, content, parent_id?, website?}`；必填校验 422 `validation_error`
   - 默认先发后审：创建即 approved
   - 带 parent_id 时为回复（楼中楼）：校验与两级归一化见「评论回复」
+  - **反滥用**（2026-10-04 新增，见「反滥用」）：限流 429 / 蜜罐假成功 / 黑名单 403
 - `GET /api/tags` → `[Tag]`（post_count 只统计公开可见文章，见「公开可见性」）
 - `GET /api/categories` → `[Category]`（同上）
 - `GET /api/archive` → `[{"year": int, "month": int, "count": int}]`，仅公开可见文章，按年月 DESC
@@ -269,7 +274,11 @@ dateModified/author/publisher/mainEntityOfPage/url/wordCount/可选 image；页�
   （meta 描述）、`icp_number`（ICP 备案号，选填）、`footer_text`（页脚自定义文字，选填）、
   `per_page`（每页文章数，默认 10）、`base_url`（RSS/sitemap 绝对 URL 覆盖，选填）、
   `og_image`（分享卡片兜底图，2026-10-04 SEO 条款新增，选填；
-  公开可读，仅用于 OG HTML 的 og:image 兜底，见「SEO / 分享元信息」）
+  公开可读，仅用于 OG HTML 的 og:image 兜底，见「SEO / 分享元信息」）、
+  `comment_blocked_keywords`（评论关键词黑名单，2026-10-04 反滥用条款新增，选填，
+  换行或逗号分隔、大小写不敏感）、`comment_max_links`（评论正文 URL 数上限，
+  2026-10-04 反滥用条款新增，整数 0~100，0=不限制，默认 3）——
+  后两项**仅后台可读写，公开接口不返回**（见「反滥用」）
 - 默认值：**安装时写入**——title/subtitle 取安装请求 `site.title`/`site.subtitle`，
   base_url 初始值取 config.toml `[server] base_url`（可为空），per_page=10，其余为空串；
   升级安装（表存在但无行）时按键回退同款默认值（title/subtitle 回退 config.toml `[site]`）
@@ -278,15 +287,19 @@ dateModified/author/publisher/mainEntityOfPage/url/wordCount/可选 image；页�
   - **不含 base_url 等敏感字段**；不进未安装门禁白名单，未安装 → 503 `not_installed`
 - `GET /api/admin/site/settings`（Bearer）→ `SiteSettingsAdmin`（全部字段，含 base_url）
 - `PUT /api/admin/site/settings`（Bearer）→ 200 `SiteSettingsAdmin`（更新后的完整设置）
-  - body: `{title, subtitle?, description?, icp_number?, footer_text?, per_page, base_url?, og_image?}`
-    （可选字段缺失/null 视为空串；全量更新语义）
+  - body: `{title, subtitle?, description?, icp_number?, footer_text?, per_page, base_url?, og_image?,
+    comment_blocked_keywords?, comment_max_links?}`
+    （可选字段缺失/null 视为空串；全量更新语义；`comment_max_links` 缺失/null 回退默认值 3）
   - 校验（失败 → 422 `validation_error`）：
     - title trim 后非空，≤255 字符；subtitle ≤255；description ≤1000；icp_number ≤100；
       footer_text ≤1000；base_url ≤500；og_image ≤500
-    - per_page 整数 1~100
+    - per_page 整数 1~100；comment_max_links 整数 0~100（0=不限制）
+    - comment_blocked_keywords ≤2000 字符
     - base_url 非空时必须是合法绝对 URL 且 scheme 为 http/https
     - og_image 空串允许（=清除）；非空时必须以 `/api/uploads/` 开头或
       以 `http://`/`https://` 开头（禁止 `javascript:` 等其它 scheme）
+  - `comment_blocked_keywords` / `comment_max_links` **仅存在于管理端响应**，
+    `GET /api/site/settings`（SiteSettingsPublic）不返回（防爬虫拿到规则调参）
   - 未登录/token 无效 → 401 `unauthorized`
 - 联动读取（改为读站点设置而非硬编码/config.toml）：
   - `GET /api/site` 的 title/subtitle
@@ -322,9 +335,11 @@ dateModified/author/publisher/mainEntityOfPage/url/wordCount/可选 image；页�
 - `GET /api/pages/:slug/comments` → `[CommentPub]`（仅 approved 且线程可见，时间 ASC, id ASC；
   形状与线程规则同文章评论，见「评论回复」）
 - `POST /api/pages/:slug/comments` → 201 `CommentPub`，body 与文章评论相同
-  `{author_name, email?, content, parent_id?}`；必填校验 422 `validation_error`；先发后审（创建即 approved）；
+  `{author_name, email?, content, parent_id?, website?}`；必填校验 422 `validation_error`；先发后审（创建即 approved）；
   comment.before_create 钩子链同样生效（ctx.post_slug = 页面 slug）；
-  回复（parent_id）与文章评论同一套机制：校验/两级归一化/连带删除/隐藏线程过滤见「评论回复」
+  回复（parent_id）与文章评论同一套机制：校验/两级归一化/连带删除/隐藏线程过滤见「评论回复」；
+  **反滥用与文章评论完全同口径**（见「反滥用」）：限流按「IP + 目标」分别计数，
+  留言板留言与文章评论互不影响
 - 留言/页面评论仅限 kind=message_board 的启用页面；其余 kind 或停用页 → 404 `not_found`
 
 留言与评论模型的整合（对现有契约破坏最小的方案）：
@@ -717,8 +732,76 @@ docs/extensibility-contract.md「主题组件」与 docs/theme-development.md「
   恢复无需二次确认；空态与既有后台一致
 - 配色走现有主题 token，暗色模式正常，**不引入新依赖、无新硬编码颜色**
 
+## 反滥用（2026-10-04 新增）
+
+针对评论/留言灌水与后台登录爆破的进程内防护。**所有错误文案只说明「被拒」这一事实，
+绝不透露具体规则、阈值、命中的关键词或剩余额度**（防爬虫按反馈调参）。
+防护状态一律为**进程内内存态**（与浏览量去重同风格）：重启清零，不引入 Redis 等外部依赖，
+条目超过软上限（50000）时清扫过期项防内存被刷爆。
+
+### 评论/留言限流
+
+- 维度：**同 IP + 同目标**（文章评论按文章 id、留言板留言按页面 id 分别计数；
+  同一 IP 对文章与页面、不同文章/页面之间互不影响）。IP 取值与浏览量去重同款：
+  `X-Forwarded-For` 首项 → `X-Real-IP` → TCP 直连地址 → 兜底 `"direct"`
+  （复用同一实现，见「浏览量与点赞」）
+- 阈值（**两个都写死为后端常量**）：
+  - 短窗口：**60 秒内最多 1 条**
+  - 长窗口：**10 分钟内最多 5 条**
+- 超限 → **429**，错误码 `too_many_requests`，响应头带 `Retry-After: <秒>`（整数，
+  为最早可再次提交的剩余秒数，向上取整、至少 1）；响应文案「提交过于频繁，请稍后再试」
+- 计数在请求**通过内容校验之后、写库之前**记一次；蜜罐命中与 403 拒绝不占用额度
+- 集成测试可通过进程内注入短线（`AntiSpam::configure`）快速触发，**阈值常量本身不变**
+
+### 蜜罐字段（website）
+
+- 评论/留言创建 body 接受可选 `website` 字段；**trim 后非空即视为机器人**
+- 行为：**返回 201 假成功**（响应形状仍为 `CommentPub`，回显传入的 author_name/content，
+  `id=0`、parent/reply 字段为 null）——但**不写库、不发通知邮件、不占用限流额度**；
+  机器人拿不到任何「被识别」的反馈。真实用户不会看到也填不到这个隐藏字段
+  （前端把它渲染为移出视口、`opacity:0`、`tabIndex=-1`、`aria-hidden` 的输入框）
+- 判定顺序中的位置：**最先**
+
+### 内容黑名单（站点设置，仅后台可配）
+
+- `comment_blocked_keywords`：换行或逗号分隔的关键词列表（大小写不敏感，中英文均可）；
+  命中**任一**关键词即拒绝
+- `comment_max_links`：正文 URL 数上限（整数 0~100，**0 = 不限制**，默认 3）；
+  计数口径为正文中 `http://` / `https://` 出现次数（大小写不敏感，含 Markdown 链接目标）
+- 任一命中/超限 → **403**，错误码 `comment_rejected`，**文案固定为
+  「内容未通过校验，请修改后重试」**——不说是哪个词、也不说是链接数超限
+- 两项设置**不进公开接口**（`GET /api/site/settings` 不包含），避免泄露规则
+
+### 判定顺序（实现注释与契约同步）
+
+评论/留言创建：**蜜罐 → 关键词/链接数（403）→ 限流（429）→ 正常落库**
+（此后才走 comment.before_create 钩子链与 SMTP 通知，两者行为不变）。
+
+### 后台登录失败退避
+
+- 维度：**同 IP + 同用户名**（IP 取值同上）
+- 连续失败（用户名不存在或密码错误）累计 **5** 次后，**锁定 15 分钟**；
+  锁定期间**即使密码正确也拒绝**：→ **429**，错误码 `too_many_attempts`，
+  响应头带 `Retry-After: <秒>`，文案「尝试次数过多，请稍后再试」
+- 登录**成功即清零**该 `IP + 用户名` 的失败计数；锁定期间不再累计新失败
+  （锁定期满后计数随窗口过期重置）
+- 判定在密码校验**之前**（否则正确密码会先走通）；用户名是否存在不影响计数
+  （避免通过锁定行为探测用户是否存在）
+- 阈值同样为后端常量（5 次 / 15 分钟），集成测试可注入短锁定期
+
+### 存储与生命周期
+
+| 状态 | 键 | 窗口/过期 | 上限 |
+| --- | --- | --- | --- |
+| 评论限流 | `{ip}|{target_type}|{target_id}` | 短 60s / 长 600s | 软上限 50000 条，超限清扫过期项 |
+| 登录失败 | `{ip}|{username}` | 锁定 900s 内的失败 | 同上 |
+
+内存态、重启清零；时间源为系统单调时钟，非持久化审计。
+
 ## 鉴权
-- `POST /api/auth/login` body `{username, password}` → 200 `AuthResult`；错误 → 401 `invalid_credentials`
+- `POST /api/auth/login` body `{username, password}` → 200 `AuthResult`；错误 → 401 `invalid_credentials`；
+  **连续失败 5 次后锁定 15 分钟 → 429 `too_many_attempts`（带 `Retry-After`），
+  锁定期间密码正确也拒绝**（见「反滥用」）
 - `GET /api/auth/me`（Bearer）→ `{"username"}`；无效/过期 → 401 `unauthorized`
 - JWT HS256，有效期 7 天，secret 来自 config.toml
 

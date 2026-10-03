@@ -21,6 +21,10 @@ export interface SiteSettings {
 /** GET/PUT /api/admin/site/settings 响应（契约 SiteSettingsAdmin） */
 export interface SiteSettingsAdmin extends SiteSettings {
   base_url: string
+  /** 评论关键词黑名单（契约「反滥用」；换行/逗号分隔，仅后台可见） */
+  comment_blocked_keywords: string
+  /** 评论正文 URL 数上限（0=不限制；仅后台可见） */
+  comment_max_links: number
 }
 
 /** PUT /api/admin/site/settings 请求体（全量更新语义） */
@@ -33,6 +37,10 @@ export interface SiteSettingsSaveBody {
   per_page: number
   base_url?: string
   og_image?: string
+  /** 评论关键词黑名单（契约「反滥用」） */
+  comment_blocked_keywords?: string
+  /** 评论正文 URL 数上限（0=不限制，缺省回退 3） */
+  comment_max_links?: number
 }
 
 /** SMTP TLS 模式（契约「邮件通知」条款） */

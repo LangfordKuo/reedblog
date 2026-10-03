@@ -5,6 +5,15 @@ use reedblog_backend::state::AppState;
 use serde_json::{json, Value};
 use std::path::Path;
 
+/// 反滥用限流（契约「反滥用」：同 IP + 同目标 60 秒 1 条）生效后，测试中连续发评论
+/// 需模拟不同访客来源——每个请求分配唯一 XFF，避免命中限流返回 429。
+fn visitor_ip() -> String {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static N: AtomicUsize = AtomicUsize::new(0);
+    let n = N.fetch_add(1, Ordering::Relaxed);
+    format!("10.{}.{}.{}", (n / 62500) % 250, (n / 250) % 250, n % 250)
+}
+
 /// 在 127.0.0.1 随机端口起一个真实服务，返回 base URL。
 /// 配置文件不存在时预写 [plugins]/[themes] dir 指向同目录（测试隔离，
 /// 避免安装时把内置 default 主题生成到仓库工作目录）；安装流程会保留这两段。
@@ -382,6 +391,7 @@ async fn install_login_publish_comment_flow() {
     // 评论：缺必填 → 422 validation_error
     let r = c
         .post(format!("{base}/api/posts/hello-world/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(&json!({"content": "没有名字"}))
         .send()
         .await
@@ -390,6 +400,7 @@ async fn install_login_publish_comment_flow() {
     assert_eq!(err_code(r).await, "validation_error");
     let r = c
         .post(format!("{base}/api/posts/hello-world/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(&json!({"author_name": "   ", "content": "x"}))
         .send()
         .await
@@ -399,6 +410,7 @@ async fn install_login_publish_comment_flow() {
     // 评论：不存在/未发布文章 → 404
     let r = c
         .post(format!("{base}/api/posts/no-such-post/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(&json!({"author_name": "x", "content": "y"}))
         .send()
         .await
@@ -408,6 +420,7 @@ async fn install_login_publish_comment_flow() {
     // 评论：先发后审，创建即 approved → 201 CommentPub
     let r = c
         .post(format!("{base}/api/posts/hello-world/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(&json!({"author_name": "读者甲", "email": "a@example.com", "content": "好文！"}))
         .send()
         .await
@@ -423,6 +436,7 @@ async fn install_login_publish_comment_flow() {
 
     let r = c
         .post(format!("{base}/api/posts/hello-world/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(&json!({"author_name": "读者乙", "content": "第二条评论"}))
         .send()
         .await

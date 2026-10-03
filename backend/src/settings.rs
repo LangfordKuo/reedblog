@@ -24,9 +24,19 @@ pub const KEY_PER_PAGE: &str = "per_page";
 pub const KEY_BASE_URL: &str = "base_url";
 /// 分享卡片兜底图（契约「SEO / 分享元信息」条款，2026-10-04 新增）
 pub const KEY_OG_IMAGE: &str = "og_image";
+/// 评论关键词黑名单（契约「反滥用」条款，2026-10-04 新增；仅后台可读，公开接口不返回）
+pub const KEY_COMMENT_BLOCKED_KEYWORDS: &str = "comment_blocked_keywords";
+/// 评论正文 URL 数上限（契约「反滥用」条款；0=不限制；仅后台可读）
+pub const KEY_COMMENT_MAX_LINKS: &str = "comment_max_links";
 
 /// per_page 默认值（与契约总则分页默认一致）
 pub const DEFAULT_PER_PAGE: i64 = 10;
+
+/// comment_max_links 默认值与上限（契约「反滥用」条款：默认 3，整数 0~100，0=不限制）
+pub const DEFAULT_COMMENT_MAX_LINKS: i64 = 3;
+pub const MAX_COMMENT_LINKS_LIMIT: i64 = 100;
+/// comment_blocked_keywords 字符数上限
+pub const MAX_BLOCKED_KEYWORDS_CHARS: usize = 2000;
 
 /// 站点设置全集（base_url 为敏感字段，公开接口序列化时单独裁剪）
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +50,10 @@ pub struct SiteSettings {
     pub base_url: String,
     /// 分享卡片兜底图（可空串；仅 OG HTML 的 og:image 兜底用）
     pub og_image: String,
+    /// 评论关键词黑名单（换行/逗号分隔；**仅后台可读写，公开接口不返回**）
+    pub comment_blocked_keywords: String,
+    /// 评论正文 URL 数上限（0=不限制；**仅后台可读写，公开接口不返回**）
+    pub comment_max_links: i64,
 }
 
 /// upsert（连接版）：先 UPDATE，rows_affected=0 再 INSERT。
@@ -117,7 +131,7 @@ pub async fn save(pool: &AnyPool, s: &SiteSettings) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
-fn to_pairs(s: &SiteSettings) -> [(&'static str, String); 8] {
+fn to_pairs(s: &SiteSettings) -> [(&'static str, String); 10] {
     [
         (KEY_TITLE, s.title.clone()),
         (KEY_SUBTITLE, s.subtitle.clone()),
@@ -127,6 +141,8 @@ fn to_pairs(s: &SiteSettings) -> [(&'static str, String); 8] {
         (KEY_PER_PAGE, s.per_page.to_string()),
         (KEY_BASE_URL, s.base_url.clone()),
         (KEY_OG_IMAGE, s.og_image.clone()),
+        (KEY_COMMENT_BLOCKED_KEYWORDS, s.comment_blocked_keywords.clone()),
+        (KEY_COMMENT_MAX_LINKS, s.comment_max_links.to_string()),
     ]
 }
 
@@ -146,6 +162,11 @@ pub async fn load(pool: &AnyPool, state: &AppState) -> ApiResult<SiteSettings> {
         .and_then(|v| v.trim().parse::<i64>().ok())
         .map(|v| v.clamp(1, 100))
         .unwrap_or(DEFAULT_PER_PAGE);
+    // 反滥用链接数上限：非法值兜底默认 3（0 为合法值=不限制）
+    let comment_max_links = get(KEY_COMMENT_MAX_LINKS)
+        .and_then(|v| v.trim().parse::<i64>().ok())
+        .map(|v| v.clamp(0, MAX_COMMENT_LINKS_LIMIT))
+        .unwrap_or(DEFAULT_COMMENT_MAX_LINKS);
 
     Ok(SiteSettings {
         title: get(KEY_TITLE)
@@ -158,6 +179,8 @@ pub async fn load(pool: &AnyPool, state: &AppState) -> ApiResult<SiteSettings> {
         per_page,
         base_url: get(KEY_BASE_URL).unwrap_or_else(|| state.configured_base_url()),
         og_image: get(KEY_OG_IMAGE).unwrap_or_default(),
+        comment_blocked_keywords: get(KEY_COMMENT_BLOCKED_KEYWORDS).unwrap_or_default(),
+        comment_max_links,
     })
 }
 
@@ -173,6 +196,8 @@ pub fn install_defaults(title: &str, subtitle: &str, base_url: &str) -> SiteSett
         per_page: DEFAULT_PER_PAGE,
         base_url: base_url.trim().trim_end_matches('/').to_string(),
         og_image: String::new(),
+        comment_blocked_keywords: String::new(),
+        comment_max_links: DEFAULT_COMMENT_MAX_LINKS,
     }
 }
 
@@ -200,6 +225,17 @@ pub fn validate(s: &SiteSettings) -> ApiResult<()> {
     if !(1..=100).contains(&s.per_page) {
         return Err(ApiError::validation(
             "每页文章数 per_page 必须是 1~100 的整数",
+        ));
+    }
+    // 反滥用设置（契约「反滥用」条款）：关键词黑名单长度 + 链接数上限范围
+    len_ok(
+        &s.comment_blocked_keywords,
+        MAX_BLOCKED_KEYWORDS_CHARS,
+        "评论关键词黑名单",
+    )?;
+    if !(0..=MAX_COMMENT_LINKS_LIMIT).contains(&s.comment_max_links) {
+        return Err(ApiError::validation(
+            "评论链接数上限 comment_max_links 必须是 0~100 的整数（0=不限制）",
         ));
     }
     if !s.base_url.is_empty() {
@@ -240,6 +276,8 @@ mod tests {
             per_page: DEFAULT_PER_PAGE,
             base_url: String::new(),
             og_image: String::new(),
+            comment_blocked_keywords: String::new(),
+            comment_max_links: DEFAULT_COMMENT_MAX_LINKS,
         }
     }
 
@@ -294,6 +332,21 @@ mod tests {
             s.og_image = ok.to_string();
             assert!(validate(&s).is_ok(), "合法 og_image 应通过: {ok}");
         }
+
+        // 反滥用：comment_max_links 越界拒绝（0 合法=不限制，上限 100）
+        for bad in [-1, 101] {
+            let mut s = base();
+            s.comment_max_links = bad;
+            assert!(validate(&s).is_err(), "越界 comment_max_links 应被拒绝: {bad}");
+        }
+        for ok in [0, 3, 100] {
+            let mut s = base();
+            s.comment_max_links = ok;
+            assert!(validate(&s).is_ok(), "合法 comment_max_links 应通过: {ok}");
+        }
+        let mut s = base();
+        s.comment_blocked_keywords = "词".repeat(MAX_BLOCKED_KEYWORDS_CHARS + 1);
+        assert!(validate(&s).is_err(), "超长关键词黑名单应被拒绝");
     }
 
     #[test]
@@ -306,5 +359,8 @@ mod tests {
         assert_eq!(s.description, "");
         assert_eq!(s.icp_number, "");
         assert_eq!(s.footer_text, "");
+        // 反滥用默认值（契约「反滥用」）：黑名单为空、链接数上限默认 3
+        assert_eq!(s.comment_blocked_keywords, "");
+        assert_eq!(s.comment_max_links, DEFAULT_COMMENT_MAX_LINKS);
     }
 }

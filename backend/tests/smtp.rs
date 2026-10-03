@@ -20,6 +20,15 @@ use tokio::net::{TcpListener, TcpStream};
 
 // ---------- 测试脚手架（与 site_settings.rs 同款：随机端口真实服务 + tempdir 隔离） ----------
 
+/// 反滥用限流（契约「反滥用」：同 IP + 同目标 60 秒 1 条）生效后，测试中连续发评论
+/// 需模拟不同访客来源——每个请求分配唯一 XFF，避免命中限流返回 429。
+fn visitor_ip() -> String {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static N: AtomicUsize = AtomicUsize::new(0);
+    let n = N.fetch_add(1, Ordering::Relaxed);
+    format!("10.{}.{}.{}", (n / 62500) % 250, (n / 250) % 250, n % 250)
+}
+
 async fn spawn_server(config_path: &str, base_url: Option<&str>) -> String {
     if !Path::new(config_path).exists() {
         let dir = Path::new(config_path).parent().unwrap();
@@ -530,6 +539,7 @@ async fn unreachable_smtp_never_blocks_comment_creation() {
     let started = Instant::now();
     let r = c
         .post(format!("{base}/api/posts/{slug}/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(&json!({"author_name": "tester", "content": "unreachable smtp but comment ok"}))
         .send()
         .await
@@ -587,6 +597,7 @@ async fn disabled_smtp_never_attempts_send() {
 
     let r = c
         .post(format!("{base}/api/posts/{slug}/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(&json!({"author_name": "tester", "content": "disabled smtp"}))
         .send()
         .await
@@ -622,6 +633,7 @@ async fn comment_and_reply_send_notifications() {
     // 顶级评论 → 一封「新评论」邮件
     let v: Value = c
         .post(format!("{base}/api/posts/{slug}/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(&json!({
             "author_name": "alice",
             "email": "alice@example.com",
@@ -667,6 +679,7 @@ async fn comment_and_reply_send_notifications() {
     // 楼中楼回复 → 第二封「新回复」邮件
     let v: Value = c
         .post(format!("{base}/api/posts/{slug}/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(&json!({
             "author_name": "bob",
             "content": "reply from smtp integration",
@@ -707,6 +720,7 @@ async fn page_message_sends_notification() {
     // 安装向导内置留言板（slug=guestbook，kind=message_board）
     let r = c
         .post(format!("{base}/api/pages/guestbook/comments"))
+        .header("x-forwarded-for", visitor_ip())
         .json(&json!({"author_name": "carol", "content": "page message triggers smtp"}))
         .send()
         .await

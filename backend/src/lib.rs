@@ -1,5 +1,6 @@
 //! reedblog 后端库入口：路由组装、启动状态恢复、服务运行。
 
+pub mod antispam;
 pub mod auth;
 pub mod backup;
 pub mod config;

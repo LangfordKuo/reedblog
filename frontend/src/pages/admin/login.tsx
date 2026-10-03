@@ -8,8 +8,13 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { api, errorMessage } from "@/lib/api"
+import { api, ApiError, errorMessage } from "@/lib/api"
 import { getToken, setSession } from "@/lib/auth"
+
+/** 剩余秒数 → 友好文案（<60 秒显示秒，否则向上取整到分钟） */
+function formatRemaining(secs: number): string {
+  return secs >= 60 ? `${Math.ceil(secs / 60)} 分钟` : `${secs} 秒`
+}
 
 export default function AdminLoginPage() {
   const navigate = useNavigate()
@@ -36,7 +41,16 @@ export default function AdminLoginPage() {
       toast.success(`欢迎回来，${result.username}`)
       navigate(from, { replace: true })
     } catch (err) {
-      setError(errorMessage(err, { invalid_credentials: "用户名或密码错误" }))
+      if (err instanceof ApiError && err.code === "too_many_attempts") {
+        // 契约「反滥用」：失败退避锁定，提示剩余时间（Retry-After），不泄露阈值细节
+        setError(
+          err.retryAfter
+            ? `登录失败次数过多，请 ${formatRemaining(err.retryAfter)}后重试`
+            : "尝试次数过多，请稍后再试",
+        )
+      } else {
+        setError(errorMessage(err, { invalid_credentials: "用户名或密码错误" }))
+      }
     } finally {
       setSubmitting(false)
     }

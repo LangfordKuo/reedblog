@@ -49,12 +49,15 @@ import type {
 export class ApiError extends Error {
   status: number
   code: string
+  /** 429 响应携带的 Retry-After 剩余秒数（契约「反滥用」）；无该头时为 undefined */
+  retryAfter?: number
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, retryAfter?: number) {
     super(message)
     this.name = "ApiError"
     this.status = status
     this.code = code
+    this.retryAfter = retryAfter
   }
 }
 
@@ -85,7 +88,15 @@ async function toResult<T>(res: Response): Promise<T> {
     const err = (data as { error?: { code?: string; message?: string } } | null)?.error
     // token 无效/过期时清掉本地会话，路由守卫会跳登录
     if (res.status === 401 && err?.code === "unauthorized") clearToken()
-    throw new ApiError(res.status, err?.code ?? "unknown_error", err?.message ?? `请求失败（HTTP ${res.status}）`)
+    // 429（反滥用限流/登录退避）带 Retry-After 剩余秒数；只认整数秒格式
+    const raw = res.headers.get("Retry-After")?.trim()
+    const retryAfter = raw && /^\d+$/.test(raw) ? Number(raw) : undefined
+    throw new ApiError(
+      res.status,
+      err?.code ?? "unknown_error",
+      err?.message ?? `请求失败（HTTP ${res.status}）`,
+      retryAfter,
+    )
   }
 
   return data as T
@@ -228,10 +239,17 @@ export const api = {
       "DELETE",
       `/posts/${encodeURIComponent(slug)}/like${qs({ liker_key: likerKey })}`,
     ),
-  // parent_id：回复的父评论 id（可选；后端做两级归一化，见契约「评论回复」）
+  // parent_id：回复的父评论 id（可选；后端做两级归一化，见契约「评论回复」）；
+  // website：蜜罐字段（契约「反滥用」，仅机器人会填；真人不可见）
   createComment: (
     slug: string,
-    body: { author_name: string; email?: string; content: string; parent_id?: number },
+    body: {
+      author_name: string
+      email?: string
+      content: string
+      parent_id?: number
+      website?: string
+    },
   ) => request<CommentPub>("POST", `/posts/${encodeURIComponent(slug)}/comments`, body),
   tags: () => request<Tag[]>("GET", "/tags"),
   categories: () => request<Category[]>("GET", "/categories"),
@@ -245,7 +263,13 @@ export const api = {
     request<CommentPub[]>("GET", `/pages/${encodeURIComponent(slug)}/comments`),
   createPageComment: (
     slug: string,
-    body: { author_name: string; email?: string; content: string; parent_id?: number },
+    body: {
+      author_name: string
+      email?: string
+      content: string
+      parent_id?: number
+      website?: string
+    },
   ) => request<CommentPub>("POST", `/pages/${encodeURIComponent(slug)}/comments`, body),
   // 全文搜索（已安装后公开；q 为空后端会 400，调用方保证非空）
   search: (q: SearchPostsQuery) => request<Page<SearchResult>>("GET", `/search${qs(q)}`),

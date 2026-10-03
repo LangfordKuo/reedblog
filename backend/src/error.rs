@@ -1,5 +1,5 @@
 use axum::extract::rejection::JsonRejection;
-use axum::http::StatusCode;
+use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::json;
@@ -10,6 +10,8 @@ pub struct ApiError {
     pub status: StatusCode,
     pub code: String,
     pub message: String,
+    /// 附加响应头（如 429 的 `Retry-After`）；契约「反滥用」条款
+    pub headers: Vec<(&'static str, String)>,
 }
 
 impl ApiError {
@@ -18,7 +20,35 @@ impl ApiError {
             status,
             code: code.to_string(),
             message: message.into(),
+            headers: Vec::new(),
         }
+    }
+
+    /// 追加响应头（构建期链式调用；值非法时忽略）
+    pub fn with_header(mut self, name: &'static str, value: impl Into<String>) -> Self {
+        self.headers.push((name, value.into()));
+        self
+    }
+
+    /// 评论/留言限流（契约「反滥用」）：429 + `Retry-After`。
+    /// 文案不透露具体规则（阈值/剩余额度细节只体现在 Retry-After 秒数上）
+    pub fn too_many_requests(retry_after_secs: u64) -> Self {
+        Self::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too_many_requests",
+            "提交过于频繁，请稍后再试",
+        )
+        .with_header("Retry-After", retry_after_secs.to_string())
+    }
+
+    /// 后台登录失败退避（契约「反滥用」）：429 + `Retry-After`
+    pub fn too_many_attempts(retry_after_secs: u64) -> Self {
+        Self::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too_many_attempts",
+            "尝试次数过多，请稍后再试",
+        )
+        .with_header("Retry-After", retry_after_secs.to_string())
     }
 
     pub fn not_found() -> Self {
@@ -74,7 +104,16 @@ impl IntoResponse for ApiError {
                 "message": self.message,
             }
         });
-        (self.status, Json(body)).into_response()
+        let mut resp = (self.status, Json(body)).into_response();
+        for (name, value) in &self.headers {
+            if let (Ok(name), Ok(value)) = (
+                name.parse::<HeaderName>(),
+                HeaderValue::from_str(value),
+            ) {
+                resp.headers_mut().insert(name, value);
+            }
+        }
+        resp
     }
 }
 

@@ -4,11 +4,12 @@
 //! - GET/POST /api/pages/:slug/comments → 留言板留言（仅 kind=message_board 的启用页面；
 //!   留言 = target_type='page' 的评论，复用评论管线：先发后审 + comment.before_create 钩子）
 
-use axum::extract::{Path, State};
+use axum::extract::{ConnectInfo, Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use sqlx::AnyPool;
 use sqlx::Row;
+use std::net::SocketAddr;
 
 use crate::error::{ApiError, ApiResult, ValidJson};
 use crate::models::{CommentPub, CreateCommentRequest, PageDetail, PageSummary};
@@ -18,9 +19,11 @@ use crate::pages::{
 use crate::state::{require_pool, AppState};
 
 use super::helpers::{
-    create_comment_pipeline, render_markdown, row_to_comment_pub, PUBLIC_COMMENT_COLUMNS,
-    PUBLIC_COMMENT_FROM, PUBLIC_COMMENT_THREAD_FILTER,
+    check_comment_gate, create_comment_pipeline, honeypot_comment, render_markdown,
+    row_to_comment_pub, CommentGate, PUBLIC_COMMENT_COLUMNS, PUBLIC_COMMENT_FROM,
+    PUBLIC_COMMENT_THREAD_FILTER,
 };
+use crate::views::client_ip;
 
 /// GET /api/pages → [PageSummary]（仅 enabled，sort_order ASC, id ASC）
 pub async fn list_pages(State(state): State<AppState>) -> ApiResult<Json<Vec<PageSummary>>> {
@@ -117,6 +120,8 @@ pub async fn list_page_comments(
 
 /// POST /api/pages/:slug/comments → 201 CommentPub（先发后审：创建即 approved）
 ///
+/// 反滥用闸门（契约「反滥用」条款）与文章评论同口径：蜜罐（201 假成功不落库）→
+/// 黑名单/链接数（403 comment_rejected）→ 限流（429 + Retry-After）→ 通过后走管线。
 /// 与文章评论同一条创建管线（helpers::create_comment_pipeline）：必填校验 →
 /// 父留言校验与两级归一化（body 可选 parent_id）→ comment.before_create 钩子链
 /// （block → 403 comment_blocked；ctx.post_slug = 页面 slug）→ 插入 target_type='page' 的评论行。
@@ -124,11 +129,35 @@ pub async fn create_page_comment(
     State(state): State<AppState>,
     Path(slug): Path<String>,
     headers: HeaderMap,
+    // 限流键的直连 IP 兜底来源（同文章评论；测试路径裸 serve 不提供时兜底 "direct"）
+    connect: Result<ConnectInfo<SocketAddr>, axum::extract::rejection::ExtensionRejection>,
     body: ValidJson<CreateCommentRequest>,
 ) -> ApiResult<(StatusCode, Json<CommentPub>)> {
     let Json(req) = body.map_err(ApiError::from)?;
+    let connect = connect.ok();
     let (pool, db_type) = require_pool(&state).await?;
     let page_id = find_message_board_page(&pool, &slug).await?;
+
+    // 反滥用与文章评论同口径（契约「反滥用」）：蜜罐 → 黑名单/链接数 → 限流 → 落库；
+    // 限流键含 target_type，留言板与文章评论分别计数
+    let ip = client_ip(&headers, connect.as_ref());
+    match check_comment_gate(
+        &state,
+        &pool,
+        "page",
+        page_id,
+        &ip,
+        req.website.as_deref(),
+        &req.content,
+    )
+    .await?
+    {
+        CommentGate::Honeypot => {
+            return Ok((StatusCode::CREATED, Json(honeypot_comment(&req))));
+        }
+        CommentGate::Allow => {}
+    }
+
     let created = create_comment_pipeline(
         &state,
         &pool,

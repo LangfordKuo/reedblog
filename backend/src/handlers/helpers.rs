@@ -759,11 +759,77 @@ pub async fn resolve_comment_parent(
     })
 }
 
+// ---------- 反滥用闸门（契约「反滥用」条款，2026-10-04 新增） ----------
+
+/// 评论创建闸门判定结果
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommentGate {
+    /// 通过：调用方继续原有创建管线（钩子 + 落库 + 通知）
+    Allow,
+    /// 蜜罐命中：调用方直接返回 201 假成功，**不落库、不发通知、不占限流额度**
+    Honeypot,
+}
+
+/// 评论/留言创建前的反滥用检查（文章与页面两处 handler 共用，判定顺序**固定**）：
+/// 1. **蜜罐**：`website` trim 后非空 → `Honeypot`（最先判定；机器人拿到 201 假成功）
+/// 2. **黑名单/链接数**：关键词命中或链接数超 `comment_max_links` → 403 `comment_rejected`
+///    （固定文案「内容未通过校验，请修改后重试」，**不透露命中的词或规则**）
+/// 3. **限流**：同 IP + 同目标超阈值 → 429 `too_many_requests` + `Retry-After`；
+///    未超限则记一次命中（蜜罐与 403 不占用额度）
+/// 通过后调用方才进入 create_comment_pipeline（插件钩子、落库、SMTP 通知均在闸门之后）。
+pub async fn check_comment_gate(
+    state: &AppState,
+    pool: &AnyPool,
+    target_type: &str,
+    target_id: i64,
+    ip: &str,
+    website: Option<&str>,
+    content: &str,
+) -> ApiResult<CommentGate> {
+    // 1. 蜜罐（最先；不查设置、不占额度、不落库）
+    if website.map(str::trim).is_some_and(|w| !w.is_empty()) {
+        return Ok(CommentGate::Honeypot);
+    }
+    // 2. 关键词黑名单 + 链接数上限（站点设置；公开接口不返回这两项）
+    let s = crate::settings::load(pool, state).await?;
+    let keywords = crate::antispam::parse_blocked_keywords(&s.comment_blocked_keywords);
+    if crate::antispam::content_rejected(&keywords, s.comment_max_links, content) {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "comment_rejected",
+            "内容未通过校验，请修改后重试",
+        ));
+    }
+    // 3. 限流：键 = "{ip}|{target_type}|{target_id}"（契约「反滥用」）
+    let key = format!("{ip}|{target_type}|{target_id}");
+    state
+        .antispam()
+        .check_and_record_comment(&key)
+        .map_err(ApiError::too_many_requests)?;
+    Ok(CommentGate::Allow)
+}
+
+/// 蜜罐命中的假成功响应体（形状与真实 CommentPub 一致，但不落库）：
+/// 回显昵称/正文，id=0、parent/reply 字段为 null——机器人拿不到「被识别」的反馈
+pub fn honeypot_comment(req: &CreateCommentRequest) -> CommentPub {
+    CommentPub {
+        id: 0,
+        author_name: req.author_name.trim().to_string(),
+        content: req.content.trim().to_string(),
+        created_at: crate::state::now_rfc3339(),
+        parent_id: None,
+        reply_to_id: None,
+        reply_to_name: None,
+    }
+}
+
 /// POST 评论共用创建管线（文章 `/api/posts/:slug/comments` 与留言板
 /// `/api/pages/:slug/comments` 两处调用，行为完全一致）：
 /// 必填校验 → 父评论校验与两级归一化（422 先于钩子）→ comment.before_create 钩子链
 /// （block → 403 comment_blocked；ctx 带归一化后的 parent_id/reply_to_id）→
 /// 插入（先发后审：创建即 approved）→ 返回 CommentPub。
+/// 注意：反滥用闸门（蜜罐/黑名单/限流）在调用本管线**之前**由 handler 执行
+/// （见 check_comment_gate），本管线内不含反滥用逻辑。
 pub async fn create_comment_pipeline(
     state: &AppState,
     pool: &AnyPool,

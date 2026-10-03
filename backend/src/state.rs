@@ -46,6 +46,8 @@ struct Inner {
     plugins: PluginHost,
     /// 浏览量去重表（进程内 (ip, post_id) 60 分钟窗口；契约「浏览量与点赞」条款）
     view_dedup: crate::views::ViewDedup,
+    /// 反滥用状态（评论限流 + 登录失败退避；进程内、重启清零；契约「反滥用」条款）
+    antispam: crate::antispam::AntiSpam,
     /// 主题存储根目录（active 的权威来源是 config.toml，目录本身启动时解析一次）
     themes_dir: PathBuf,
     /// 图片上传存储根目录（config.toml [uploads] dir，启动时解析一次）
@@ -89,6 +91,7 @@ impl AppState {
                 runtime: RwLock::new(Runtime::default()),
                 plugins: PluginHost::new(plugins_dir),
                 view_dedup: crate::views::ViewDedup::default(),
+                antispam: crate::antispam::AntiSpam::new(),
                 themes_dir,
                 uploads_dir,
                 mail_last_result: std::sync::Mutex::new(None),
@@ -108,6 +111,12 @@ impl AppState {
     /// 浏览量去重表（重启清零；尽力去重语义见契约「浏览量与点赞」条款）
     pub fn view_dedup(&self) -> &crate::views::ViewDedup {
         &self.inner.view_dedup
+    }
+
+    /// 反滥用状态（评论限流 + 登录失败退避；进程内、重启清零；契约「反滥用」条款）。
+    /// 集成测试可在 build_router 前用 `state.antispam().configure(...)` 注入短窗口
+    pub fn antispam(&self) -> &crate::antispam::AntiSpam {
+        &self.inner.antispam
     }
 
     /// 最近一次邮件发送尝试结果（内存态、重启清零；未发送过为 None）

@@ -275,12 +275,17 @@ pub struct SiteSettingsPublic {
     pub og_image: String,
 }
 
-/// GET/PUT /api/admin/site/settings 响应（契约 SiteSettingsAdmin = Public + base_url）
+/// GET/PUT /api/admin/site/settings 响应（契约 SiteSettingsAdmin = Public + base_url
+/// + 反滥用两项；后两项仅后台可见，公开响应绝不返回）
 #[derive(Debug, Clone, Serialize)]
 pub struct SiteSettingsAdmin {
     #[serde(flatten)]
     pub public: SiteSettingsPublic,
     pub base_url: String,
+    /// 评论关键词黑名单（契约「反滥用」条款；换行/逗号分隔，仅后台可读）
+    pub comment_blocked_keywords: String,
+    /// 评论正文 URL 数上限（0=不限制，默认 3；仅后台可读）
+    pub comment_max_links: i64,
 }
 
 impl From<&crate::settings::SiteSettings> for SiteSettingsPublic {
@@ -302,6 +307,8 @@ impl From<&crate::settings::SiteSettings> for SiteSettingsAdmin {
         Self {
             public: s.into(),
             base_url: s.base_url.clone(),
+            comment_blocked_keywords: s.comment_blocked_keywords.clone(),
+            comment_max_links: s.comment_max_links,
         }
     }
 }
@@ -445,6 +452,10 @@ pub struct CreateCommentRequest {
     /// 父本身有 parent_id 时两级归一化：parent_id 改写为顶级祖先、被回复人进 reply_to_id
     #[serde(default)]
     pub parent_id: Option<i64>,
+    /// 蜜罐字段（可选；契约「反滥用」条款）：trim 后非空即视为机器人 →
+    /// 201 假成功但不落库、不发通知。真人看不到该字段（前端隐藏且不可聚焦）
+    #[serde(default)]
+    pub website: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -506,6 +517,12 @@ pub struct SiteSettingsBody {
     /// 分享卡片兜底图（可选；缺失/null 视为空串=清除）
     #[serde(default)]
     pub og_image: Option<String>,
+    /// 评论关键词黑名单（可选；缺失/null 视为空串=清除；契约「反滥用」条款）
+    #[serde(default)]
+    pub comment_blocked_keywords: Option<String>,
+    /// 评论链接数上限（可选；缺失/null 回退默认值 3；0=不限制）
+    #[serde(default)]
+    pub comment_max_links: Option<i64>,
 }
 
 impl SiteSettingsBody {
@@ -521,6 +538,10 @@ impl SiteSettingsBody {
             per_page: self.per_page,
             base_url: trim(self.base_url).trim_end_matches('/').to_string(),
             og_image: trim(self.og_image),
+            comment_blocked_keywords: trim(self.comment_blocked_keywords),
+            comment_max_links: self
+                .comment_max_links
+                .unwrap_or(crate::settings::DEFAULT_COMMENT_MAX_LINKS),
         }
     }
 }

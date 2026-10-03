@@ -1,15 +1,17 @@
 //! GET /api/site、POST /api/auth/login、GET /api/auth/me
 
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use serde_json::{json, Value};
 use sqlx::Row;
+use std::net::SocketAddr;
 
 use crate::auth::{issue_token, require_auth, verify_password};
 use crate::error::{ApiError, ApiResult, ValidJson};
 use crate::models::{AuthResult, LoginRequest, SiteInfo};
 use crate::state::{require_pool, AppState};
+use crate::views::client_ip;
 
 /// GET /api/site → SiteInfo（title/subtitle 与站点设置一致，契约「站点设置-联动读取」条款；
 /// 库不可读时回退 config.toml [site] 的 Runtime 缓存值）
@@ -65,15 +67,32 @@ pub async fn site_stats(State(state): State<AppState>) -> ApiResult<Json<Value>>
 }
 
 /// POST /api/auth/login → AuthResult；用户名或密码错误 → 401 invalid_credentials
+///
+/// 反滥用失败退避（契约「反滥用」条款）：同 IP + 用户名连续失败 5 次 → 锁定 15 分钟，
+/// 锁定期间**即使密码正确也拒绝** → 429 too_many_attempts + Retry-After；成功登录清零计数。
+/// 判定在密码校验之前（先于任何凭据比对），用户名不存在同样计入失败（不泄露用户是否存在）。
 pub async fn login(
     State(state): State<AppState>,
+    headers: HeaderMap,
+    // 限流键的直连 IP 兜底来源；测试路径的裸 axum::serve 不提供（同评论接口）
+    connect: Result<ConnectInfo<SocketAddr>, axum::extract::rejection::ExtensionRejection>,
     body: ValidJson<LoginRequest>,
 ) -> ApiResult<Json<AuthResult>> {
     let Json(req) = body.map_err(ApiError::from)?;
+    let connect = connect.ok();
     let (pool, _db_type) = require_pool(&state).await?;
 
+    let username = req.username.trim().to_string();
+    let ip = client_ip(&headers, connect.as_ref());
+    // 退避键 = "{ip}|{username}"（契约「反滥用」存储表）
+    let key = format!("{ip}|{username}");
+    // 锁定判定：先于密码校验（锁定期间即使密码正确也拒绝）
+    if let Some(retry_after) = state.antispam().login_locked_for(&key) {
+        return Err(ApiError::too_many_attempts(retry_after));
+    }
+
     let row = sqlx::query("SELECT username, password_hash FROM users WHERE username = ?")
-        .bind(req.username.trim())
+        .bind(&username)
         .fetch_optional(&pool)
         .await?;
 
@@ -86,11 +105,17 @@ pub async fn login(
     });
     let (username, password_hash) = match stored {
         Some(v) => v,
-        None => return Err(ApiError::invalid_credentials()),
+        None => {
+            state.antispam().record_login_failure(&key);
+            return Err(ApiError::invalid_credentials());
+        }
     };
     if !verify_password(&password_hash, &req.password) {
+        state.antispam().record_login_failure(&key);
         return Err(ApiError::invalid_credentials());
     }
+    // 成功清零该 IP + 用户名的失败计数（契约「反滥用」）
+    state.antispam().clear_login_failures(&key);
 
     let rt = state.runtime().await;
     let secret = rt

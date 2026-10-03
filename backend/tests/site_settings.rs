@@ -216,7 +216,10 @@ async fn update_settings_propagates_everywhere() {
             "per_page": 5,
             "base_url": "https://blog.example.com",
             // 请求未带 og_image → 视为空串（全量更新语义）
-            "og_image": ""
+            "og_image": "",
+            // 反滥用（契约「反滥用」条款）：请求未带 → 黑名单空串、链接数回默认 3
+            "comment_blocked_keywords": "",
+            "comment_max_links": 3
         })
     );
 
