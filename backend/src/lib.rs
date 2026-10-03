@@ -14,6 +14,7 @@ pub mod settings;
 pub mod state;
 pub mod theme_settings;
 pub mod themes;
+pub mod widgets;
 
 use axum::extract::{DefaultBodyLimit, Request, State};
 use axum::http::{header, HeaderValue, Method};
@@ -80,6 +81,8 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/site", get(site_auth::site_info))
         // 站点设置（公开；不进未安装门禁白名单，未安装 503）
         .route("/site/settings", get(site_settings::public_site_settings))
+        // 站点统计（公开；站点信息组件数据源，未安装 503）
+        .route("/site/stats", get(site_auth::site_stats))
         .route("/posts", get(public::list_posts))
         .route("/posts/{slug}", get(public::get_post))
         .route(
@@ -177,6 +180,8 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/themes/{slug}/assets/{*path}", get(frontend::theme_asset))
         // 主题设置生效值（公开，未安装门禁白名单；未安装时 values=声明默认值）
         .route("/themes/{slug}/settings", get(frontend::theme_settings))
+        // 主题组件生效配置（公开，未安装门禁白名单；未安装时=内置默认启用集）
+        .route("/themes/{slug}/widgets", get(frontend::theme_widgets))
         // 管理：插件
         .route(
             "/admin/plugins",
@@ -219,6 +224,11 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route(
             "/admin/themes/{slug}/settings",
             axum::routing::put(admin_themes::admin_update_theme_settings),
+        )
+        // 管理：主题组件（GET 全量合并配置；PUT 全量替换保存）
+        .route(
+            "/admin/themes/{slug}/widgets",
+            get(admin_themes::admin_get_theme_widgets).put(admin_themes::admin_put_theme_widgets),
         )
         // 未匹配路径兜底（layer 不覆盖默认 fallback，需显式声明）
         .fallback(api_fallback)

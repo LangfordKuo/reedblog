@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "re
 import { Loader2Icon, SaveIcon } from "lucide-react"
 import { toast } from "sonner"
 
+import { WidgetsManager } from "@/components/admin/widgets-manager"
 import { BlockSpinner } from "@/components/spinner"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -192,6 +193,9 @@ export default function AdminThemeSettingsPage() {
           </div>
         </form>
       )}
+
+      {/* 组件管理区：启用/排序/位置/参数 + 自定义 HTML 组件（契约「主题组件」） */}
+      {panel && <WidgetsManager slug={panel.slug} />}
     </div>
   )
 }

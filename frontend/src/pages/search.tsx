@@ -2,15 +2,16 @@ import { useEffect, useState, type FormEvent } from "react"
 import { useSearchParams } from "react-router-dom"
 import { SearchIcon, SearchXIcon } from "lucide-react"
 
-import { BlogSidebar } from "@/components/blog-sidebar"
 import { Highlight } from "@/components/highlight"
 import { Pagination } from "@/components/pagination"
 import { PostCard } from "@/components/post-feed"
 import { BlockSpinner } from "@/components/spinner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { WidgetRegion } from "@/components/widgets"
 import { api, errorMessage } from "@/lib/api"
 import { useThemeSettings } from "@/lib/theme-settings"
+import { useRegionWidgets } from "@/lib/widgets"
 import type { Page, SearchResult } from "@/lib/types"
 
 /** 与后端 split_search_terms 一致：空白切分、上限 8 个词条（多余忽略） */
@@ -28,6 +29,8 @@ function splitTerms(q: string): string[] {
 export default function SearchPage() {
   const { layout } = useThemeSettings()
   const threeColumn = layout === "topbar-minimal-three-column"
+  // 双列布局下侧栏由 WidgetRegion("sidebar") 提供；无启用组件时收缩为单列（不渲染空壳）
+  const hasSidebar = useRegionWidgets("sidebar").length > 0
   const [searchParams, setSearchParams] = useSearchParams()
   const q = (searchParams.get("q") ?? "").trim()
   const page = Math.max(1, Number(searchParams.get("page")) || 1)
@@ -97,7 +100,13 @@ export default function SearchPage() {
   const terms = splitTerms(q)
 
   return (
-    <div className={threeColumn ? undefined : "grid gap-8 lg:grid-cols-[minmax(0,1fr)_288px]"}>
+    <div
+      className={
+        threeColumn || !hasSidebar
+          ? undefined
+          : "grid gap-8 lg:grid-cols-[minmax(0,1fr)_288px]"
+      }
+    >
       <div>
         <form onSubmit={submit} className="mb-6 flex gap-2">
           <Input
@@ -157,9 +166,9 @@ export default function SearchPage() {
           </>
         ) : null}
       </div>
-      {!threeColumn && (
+      {!threeColumn && hasSidebar && (
         <aside className="lg:sticky lg:top-24 lg:self-start">
-          <BlogSidebar />
+          <WidgetRegion region="sidebar" />
         </aside>
       )}
     </div>

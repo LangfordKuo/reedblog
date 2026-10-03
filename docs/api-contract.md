@@ -37,6 +37,17 @@ AuthResult   = {token, username, expires_at}
 UploadResult = {url, size: <字节数>, filename: <原始文件名回显>}
 SiteSettingsPublic = {title, subtitle, description, icp_number, footer_text, per_page: int}
 SiteSettingsAdmin  = SiteSettingsPublic + {base_url}   // base_url 为敏感字段，公开接口不返回
+SiteStats      = {post_count: int, comment_count: int, installed_at: string}
+               // 2026-10-03 组件系统新增：published 文章数 / approved 评论数（含页面留言）/
+               // 安装时间（users 表最早 created_at，RFC3339；取不到时为空串）——站点信息组件数据源
+WidgetPosition = "sidebar" | "left" | "right" | "footer"   // 规范位置枚举（校验范围）
+WidgetKind     = "builtin" | "custom"                      // builtin=前端内置 React 组件；custom=HTML 片段
+WidgetSource   = "builtin" | "theme" | "admin"             // 组件来源：内置 / 主题声明 / 后台自建
+WidgetConfig   = {key, kind: WidgetKind, label, position: WidgetPosition,
+                  sort_order: int, config: {<参数键>: string|number|bool}}
+               // 公开形状；custom 组件的 config 含 title（可空）与 html（已做 {{param}} 替换）
+WidgetAdmin    = WidgetConfig + {source: WidgetSource, enabled: bool, params: [ThemeSetting]}
+               // 管理形状；params 为该组件可配置参数声明（复用 ThemeSetting 形状，见「主题设置」）
 ```
 
 ## 安装向导（未初始化时）
@@ -53,7 +64,10 @@ SiteSettingsAdmin  = SiteSettingsPublic + {base_url}   // base_url 为敏感字�
 
 ## 站点公开接口（已安装后可用）
 - `GET /api/site` → `SiteInfo`（title/subtitle 与站点设置一致，见「站点设置」）
-- `GET /api/posts?page&per_page&tag=<name>&category=<name>&year=<int>&month=<int>` → 分页 `[PostPublic]`，仅 published，按 published_at DESC；列表不含 content_md
+- `GET /api/posts?page&per_page&tag=<name>&category=<name>&year=<int>&month=<int>&order=<recent|hot>` → 分页 `[PostPublic]`，仅 published；列表不含 content_md
+  - order（2026-10-03 组件系统新增）：`recent`（默认，缺省即此）按 published_at DESC；
+    `hot` 按 comment_count DESC, published_at DESC（热门文章组件数据源，零迁移：
+    comment_count 为既有 SELECT 别名，SQLite/MySQL 均支持按别名排序）；其他值 → 422 `validation_error`
 - excerpt 为空时的回退（2026-10-03 定）：由 content_md 生成**纯文本**摘要（剥离 Markdown 语法：标题#、强调符、代码围栏、表格线、链接保留文字），截断至 ≤200 字符；不得返回含 Markdown 符号的原文
 - `GET /api/posts/:slug` → `PostDetail`；不存在/未发布 → 404 `not_found`
 - `GET /api/posts/:slug/comments` → `[CommentPub]`（仅 approved，按时间 ASC）
@@ -129,6 +143,8 @@ RSS 与 sitemap（2026-10-03 新增；base_url 来源 2026-10-03 更新为站点
   - `GET /api/site` 的 title/subtitle
   - `GET /api/posts`、`GET /api/search` 未传 per_page 时的默认值
   - `GET /api/feed.xml` 的 channel title/description、feed 与 sitemap 的绝对 URL（优先级见「RSS 与 sitemap」）
+- `GET /api/site/stats` → `SiteStats`（2026-10-03 组件系统新增；公开、无需鉴权，
+  站点信息组件数据源。不进未安装门禁白名单，未安装 → 503 `not_installed`）
 
 页面（2026-10-03 新增）：
 
@@ -204,6 +220,53 @@ RSS 与 sitemap（2026-10-03 新增；base_url 来源 2026-10-03 更新为站点
 - 前端应用：生效值写入 `:root` 的 `--theme-setting-<key（_ 换 -）>` CSS 变量与
   `data-setting-*` 属性；layout 生效值写 `data-layout`；切换主题/保存设置后
   重新拉取即时生效，无需刷新
+
+主题组件（widgets，2026-10-03 新增；声明规格与自定义组件写法见
+docs/extensibility-contract.md「主题组件」与 docs/theme-development.md「组件（widgets）」）：
+
+- 存储：**独立 `theme_widgets` 表**（按主题 slug 隔离，与 theme_settings 同款生命周期：
+  切换主题不丢、删除主题连带删除其行）。选独立表而非复用 theme_settings 的原因：
+  组件配置是**多行结构化记录**（每组件一行：enabled/position/sort_order/config JSON），
+  塞进 key-value 表需要序列化整表且无法按行校验，独立表契约更清晰。
+  SQLite/MySQL 共用 SQL（Any 驱动，`?` 占位符）；时间戳沿用全库 RFC3339 UTC 文本惯例
+- 组件全集 = **内置组件**（后端注册表 + 前端 React 实现，共 7 个：`recent-posts` 最新文章、
+  `hot-posts` 热门文章、`tag-cloud` 标签云、`categories` 分类列表、`archive` 归档、
+  `links` 友情链接、`site-info` 站点信息）+ **主题声明组件**（theme.toml `[[widgets]]`，
+  kind=custom，HTML 片段来自 `assets/widgets/<key>.html`）+ **后台自建自定义组件**
+  （kind=custom、source=admin，HTML 存 config.html）。每个组件的参数 schema 见
+  `WidgetAdmin.params`（内置组件参数：title 标题文字、count 显示条数等）
+- **默认值**（安装即生效、无需写库；DB 行仅是覆盖）：default 主题默认启用
+  `recent-posts`(sort 10)、`tag-cloud`(sort 30)、`categories`(sort 40)，位置均 sidebar；
+  其余内置组件默认停用。默认启用集与主题无关（任何主题的内置组件默认值一致）
+- position 规范枚举恒为 `sidebar|left|right|footer` 四值（存储与校验与布局无关）；
+  **布局降级映射由前端执行**：双列布局（topbar-two-column）可用区域为 sidebar/footer，
+  left/right 降级并入 sidebar 列；三列布局（topbar-minimal-three-column）可用区域为
+  left/right/footer，sidebar 降级映射到右栏。某区域无启用组件时不渲染空壳
+- 公开接口（未安装门禁**白名单**，未安装时返回内置默认值，保证安装页可渲染）：
+  - `GET /api/themes/:slug/widgets` → 200 `{slug, widgets: [WidgetConfig]}`
+    —— 仅 **enabled** 组件，按 sort_order ASC, key ASC；custom 组件的 config.html
+    已完成 `{{param}}` 令牌替换（值取生效 config，不转义——与插件注入同信任模型）；
+    slug 磁盘不存在 → 404（default 缺盘以内置常量兜底，同主题设置）
+- 管理接口（均需 Bearer；按 slug 读写，slug 未安装 → 404）：
+  - `GET /api/admin/themes/:slug/widgets` → 200
+    `{slug, positions: [WidgetPosition], widgets: [WidgetAdmin]}`
+    —— widgets 为**全量合并列表**：内置注册表 + 主题声明组件（默认值打底、已存行覆盖）
+    + 自建 custom 行，按 sort_order ASC, key ASC；positions 为规范枚举（校验范围）
+  - `PUT /api/admin/themes/:slug/widgets` body `{widgets: [WidgetInput]}` → 200 同 GET 形状
+    - `WidgetInput = {key, kind: "builtin"|"custom", enabled?, position, sort_order?, config?}`
+      （enabled 缺省 false、sort_order 缺省 0、config 缺省 {}）
+    - **全量替换语义**：请求数组即该主题最终配置；未出现的内置/主题组件的已存行删除
+      （回到默认值），未出现的自建 custom 组件删除（即「删组件」）
+    - 校验（失败 → 422，均不写库）：widgets 非数组 → `validation_error`；
+      key 重复 → `invalid_value`；kind=builtin 但 key 不在内置注册表 → `unknown_widget`；
+      kind=custom 的 key 非法（不匹配 ^[a-z0-9][a-z0-9_-]{0,63}$）或与内置 key 冲突 →
+      `invalid_value`；position 不在规范枚举 → `invalid_value`；config 非对象/含未声明参数/
+      参数类型不符/超长（title ≤200 字符、html ≤65536 字符、其余参数按 params 声明的
+      text ≤500 / textarea ≤5000 规则）→ `invalid_value`；单主题组件数 >100 → `invalid_value`
+    - 主题声明组件（source=theme）的 html 权威来源是主题包 `assets/widgets/<key>.html`
+      （每次读取时从磁盘加载）；config.html 非空时作为**后台覆盖**优先于文件
+- 生效方式：前台按 position+sort_order 渲染；后台保存后前端 store 重新拉取即时生效，
+  无需刷新
 
 ## 鉴权
 - `POST /api/auth/login` body `{username, password}` → 200 `AuthResult`；错误 → 401 `invalid_credentials`

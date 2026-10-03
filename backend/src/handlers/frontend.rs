@@ -65,6 +65,35 @@ pub async fn theme_settings(
     })))
 }
 
+/// GET /api/themes/:slug/widgets → {slug, widgets}（契约「主题组件」）
+/// 仅 enabled 组件，按 sort_order ASC, key ASC；custom 组件 config.html 已做
+/// {{param}} 令牌替换。未安装（DB 不可用）时返回内置默认启用集（白名单端点）；
+/// default 主题磁盘缺失时以内置常量兜底；其余磁盘不存在的 slug → 404。
+pub async fn theme_widgets(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+) -> ApiResult<Json<Value>> {
+    if !packages::valid_slug(&slug) {
+        return Err(ApiError::not_found());
+    }
+    let Some(m) = themes::load_manifest_or_builtin(state.themes_dir(), &slug) else {
+        return Err(ApiError::not_found());
+    };
+    let decls = m.normalized_widgets();
+    let rows = match crate::state::require_pool(&state).await {
+        Ok((pool, _db_type)) => crate::widgets::load_rows(&pool, &slug)
+            .await
+            .unwrap_or_default(),
+        Err(_) => Vec::new(),
+    };
+    Ok(Json(crate::widgets::public_response(
+        state.themes_dir(),
+        &slug,
+        &decls,
+        &rows,
+    )))
+}
+
 /// GET /api/themes/:slug/theme.css → text/css（不存在 404）
 pub async fn theme_css(State(state): State<AppState>, Path(slug): Path<String>) -> Response {
     if !packages::valid_slug(&slug) {

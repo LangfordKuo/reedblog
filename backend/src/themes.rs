@@ -181,6 +181,37 @@ pub fn valid_hex_color(v: &str) -> bool {
     b[1..].iter().all(|c| c.is_ascii_hexdigit())
 }
 
+/// theme.toml `[[widgets]]` 单条声明（扩展契约「主题组件」条款）：
+/// 主题自带的 HTML 片段型自定义组件，片段固定在 assets/widgets/<key>.html
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThemeWidgetDecl {
+    /// 组件唯一标识：^[a-z0-9][a-z0-9_-]{0,63}$，主题内唯一，不得与内置组件 key 冲突
+    pub key: String,
+    /// 显示名；缺省（空）时归一化为 key
+    #[serde(default)]
+    pub label: String,
+    /// 默认是否启用（缺省 false）
+    #[serde(default)]
+    pub default_enabled: bool,
+    /// 默认位置（sidebar|left|right|footer，缺省 sidebar）
+    #[serde(default = "default_widget_position")]
+    pub default_position: String,
+    /// 默认排序（缺省 100，排在内置组件默认序之后）
+    #[serde(default = "default_widget_sort")]
+    pub default_sort: i64,
+    /// 参数 schema（复用 [[settings]] 声明形状与校验；片段内 {{param}} 令牌替换）
+    #[serde(default)]
+    pub params: Vec<ThemeSettingDecl>,
+}
+
+fn default_widget_position() -> String {
+    "sidebar".to_string()
+}
+
+fn default_widget_sort() -> i64 {
+    100
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThemeManifest {
     pub name: String,
@@ -198,6 +229,9 @@ pub struct ThemeManifest {
     /// 主题设置项声明（可选；未声明的主题面板显示「该主题无自定义设置项」）
     #[serde(default)]
     pub settings: Vec<ThemeSettingDecl>,
+    /// 主题声明组件（可选；未声明的主题只有内置组件可配）
+    #[serde(default)]
+    pub widgets: Vec<ThemeWidgetDecl>,
 }
 
 impl ThemeManifest {
@@ -218,102 +252,173 @@ impl ThemeManifest {
         if !packages::valid_semver(&self.version) {
             return Err(format!("version '{}' 不是合法 semver", self.version));
         }
-        self.validate_settings()
+        self.validate_settings()?;
+        self.validate_widgets()
     }
 
     /// 校验 [[settings]] 声明（契约「主题设置项」：key/type/options/default 规则）；
     /// 上传 zip 与后端解析共用，违规 → 422 invalid_manifest
     pub fn validate_settings(&self) -> Result<(), String> {
+        validate_param_decls(&self.settings, "settings")
+    }
+
+    /// 校验 [[widgets]] 声明（扩展契约「主题组件」）：key 规则同 settings.key、
+    /// 主题内唯一、不得与内置组件 key 冲突；default_position 须在规范枚举内；
+    /// params 复用 [[settings]] 的声明校验。违规 → 422 invalid_manifest
+    pub fn validate_widgets(&self) -> Result<(), String> {
         let mut seen = std::collections::HashSet::new();
-        for s in &self.settings {
-            if !valid_setting_key(&s.key) {
+        for w in &self.widgets {
+            if !valid_setting_key(&w.key) {
                 return Err(format!(
-                    "settings.key '{}' 非法（须匹配 ^[a-z0-9][a-z0-9_-]{{0,63}}$）",
-                    s.key
+                    "widgets.key '{}' 非法（须匹配 ^[a-z0-9][a-z0-9_-]{{0,63}}$）",
+                    w.key
                 ));
             }
-            if !seen.insert(&s.key) {
-                return Err(format!("settings.key '{}' 重复声明", s.key));
+            if !seen.insert(&w.key) {
+                return Err(format!("widgets.key '{}' 重复声明", w.key));
             }
-            if !SETTING_TYPES.contains(&s.kind.as_str()) {
+            if crate::widgets::builtin_def(&w.key).is_some() {
+                return Err(format!("widgets.key '{}' 与内置组件 key 冲突", w.key));
+            }
+            if !crate::widgets::valid_position(&w.default_position) {
                 return Err(format!(
-                    "settings[{}].type '{}' 未知（须为 {} 之一）",
-                    s.key,
-                    s.kind,
-                    SETTING_TYPES.join(" / ")
+                    "widgets[{}].default_position '{}' 非法（须为 {} 之一）",
+                    w.key,
+                    w.default_position,
+                    crate::widgets::POSITIONS.join(" / ")
                 ));
             }
-            if s.group.as_deref().map(|g| g.chars().count()).unwrap_or(0) > 64 {
-                return Err(format!("settings[{}].group 过长（上限 64 字符）", s.key));
+            if w.label.chars().count() > 64 {
+                return Err(format!("widgets[{}].label 过长（上限 64 字符）", w.key));
             }
-            let is_select = s.kind == "select";
-            if is_select {
-                let opts = s
-                    .options
-                    .as_ref()
-                    .filter(|o| !o.is_empty())
-                    .ok_or_else(|| {
-                        format!("settings[{}]: type=select 必须声明非空 options", s.key)
-                    })?;
-                if opts.iter().any(|o| o.value.trim().is_empty()) {
-                    return Err(format!("settings[{}].options 含空 value", s.key));
-                }
-                let mut uniq = std::collections::HashSet::new();
-                for o in opts {
-                    if !uniq.insert(&o.value) {
-                        return Err(format!(
-                            "settings[{}].options 含重复 value '{}'",
-                            s.key, o.value
-                        ));
-                    }
-                }
-            } else if s.options.is_some() {
-                return Err(format!(
-                    "settings[{}]: 仅 type=select 允许声明 options",
-                    s.key
-                ));
-            }
-            if let Some(d) = &s.default {
-                validate_default(&s.key, &s.kind, s.options.as_deref(), d)?;
-            }
+            validate_param_decls(&w.params, &format!("widgets[{}].params", w.key))?;
         }
         Ok(())
     }
 
     /// 下发用归一化声明：label 缺省填 key、group 空串视为无
     pub fn normalized_settings(&self) -> Vec<ThemeSettingDecl> {
-        self.settings
+        normalize_param_decls(&self.settings)
+    }
+
+    /// 下发用归一化组件声明：label 缺省填 key；**宽容过滤**非法声明
+    /// （读路径用：磁盘上手工改坏的声明静默跳过，不阻断其余组件；
+    /// 上传路径的严格校验由 validate_widgets 负责）
+    pub fn normalized_widgets(&self) -> Vec<ThemeWidgetDecl> {
+        let mut seen = std::collections::HashSet::new();
+        self.widgets
             .iter()
-            .map(|s| ThemeSettingDecl {
-                key: s.key.clone(),
-                label: if s.label.trim().is_empty() {
-                    s.key.clone()
+            .filter(|w| {
+                valid_setting_key(&w.key)
+                    && seen.insert(w.key.clone())
+                    && crate::widgets::builtin_def(&w.key).is_none()
+                    && crate::widgets::valid_position(&w.default_position)
+                    && validate_param_decls(&w.params, "params").is_ok()
+            })
+            .map(|w| ThemeWidgetDecl {
+                key: w.key.clone(),
+                label: if w.label.trim().is_empty() {
+                    w.key.clone()
                 } else {
-                    s.label.trim().to_string()
+                    w.label.trim().to_string()
                 },
-                kind: s.kind.clone(),
-                group: s
-                    .group
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|g| !g.is_empty())
-                    .map(str::to_string),
-                default: s.default.clone(),
-                options: s.options.clone(),
+                default_enabled: w.default_enabled,
+                default_position: w.default_position.clone(),
+                default_sort: w.default_sort,
+                params: normalize_param_decls(&w.params),
             })
             .collect()
     }
 }
 
+/// 参数声明数组的通用校验（[[settings]] 与 [[widgets]].params 共用；
+/// ctx 为错误消息前缀，如 "settings" / "widgets[notice].params"）
+fn validate_param_decls(decls: &[ThemeSettingDecl], ctx: &str) -> Result<(), String> {
+    let mut seen = std::collections::HashSet::new();
+    for s in decls {
+        if !valid_setting_key(&s.key) {
+            return Err(format!(
+                "{ctx}.key '{}' 非法（须匹配 ^[a-z0-9][a-z0-9_-]{{0,63}}$）",
+                s.key
+            ));
+        }
+        if !seen.insert(&s.key) {
+            return Err(format!("{ctx}.key '{}' 重复声明", s.key));
+        }
+        if !SETTING_TYPES.contains(&s.kind.as_str()) {
+            return Err(format!(
+                "{ctx}[{}].type '{}' 未知（须为 {} 之一）",
+                s.key,
+                s.kind,
+                SETTING_TYPES.join(" / ")
+            ));
+        }
+        if s.group.as_deref().map(|g| g.chars().count()).unwrap_or(0) > 64 {
+            return Err(format!("{ctx}[{}].group 过长（上限 64 字符）", s.key));
+        }
+        let is_select = s.kind == "select";
+        if is_select {
+            let opts = s
+                .options
+                .as_ref()
+                .filter(|o| !o.is_empty())
+                .ok_or_else(|| format!("{ctx}[{}]: type=select 必须声明非空 options", s.key))?;
+            if opts.iter().any(|o| o.value.trim().is_empty()) {
+                return Err(format!("{ctx}[{}].options 含空 value", s.key));
+            }
+            let mut uniq = std::collections::HashSet::new();
+            for o in opts {
+                if !uniq.insert(&o.value) {
+                    return Err(format!(
+                        "{ctx}[{}].options 含重复 value '{}'",
+                        s.key, o.value
+                    ));
+                }
+            }
+        } else if s.options.is_some() {
+            return Err(format!("{ctx}[{}]: 仅 type=select 允许声明 options", s.key));
+        }
+        if let Some(d) = &s.default {
+            validate_default(ctx, &s.key, &s.kind, s.options.as_deref(), d)?;
+        }
+    }
+    Ok(())
+}
+
+/// 参数声明数组的归一化（label 缺省填 key、group 空串视为无）
+fn normalize_param_decls(decls: &[ThemeSettingDecl]) -> Vec<ThemeSettingDecl> {
+    decls
+        .iter()
+        .map(|s| ThemeSettingDecl {
+            key: s.key.clone(),
+            label: if s.label.trim().is_empty() {
+                s.key.clone()
+            } else {
+                s.label.trim().to_string()
+            },
+            kind: s.kind.clone(),
+            group: s
+                .group
+                .as_deref()
+                .map(str::trim)
+                .filter(|g| !g.is_empty())
+                .map(str::to_string),
+            default: s.default.clone(),
+            options: s.options.clone(),
+        })
+        .collect()
+}
+
 /// default 值与 type 的匹配校验（契约「主题设置项」声明校验条款）
 fn validate_default(
+    ctx: &str,
     key: &str,
     kind: &str,
     options: Option<&[ThemeSettingOption]>,
     d: &serde_json::Value,
 ) -> Result<(), String> {
     use serde_json::Value as V;
-    let err = |msg: String| Err(format!("settings[{key}].default {msg}"));
+    let err = |msg: String| Err(format!("{ctx}[{key}].default {msg}"));
     match kind {
         "switch" => match d {
             V::Bool(_) => Ok(()),

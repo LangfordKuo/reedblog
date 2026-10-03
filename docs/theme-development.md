@@ -8,14 +8,16 @@
 
 ## 1. 主题是什么
 
-一个 reedblog 主题就是**一个目录 / 一个 zip 包**，由四部分组成：
+一个 reedblog 主题就是**一个目录 / 一个 zip 包**，由以下几部分组成：
 
 1. **设计令牌**（`theme.toml` 的 `[tokens]` / `[tokens_dark]`）——覆盖前端
    shadcn/Tailwind 体系的 CSS 变量，决定全站配色与圆角；
 2. **设置项声明**（`theme.toml` 的 `[[settings]]`，可选）——主题自描述的可配置项，
    后台按声明渲染设置面板、按主题独立保存（见 §6）；
-3. **自定义 CSS**（`theme.css`，可选）——任意补充样式；
-4. **静态资源**（`assets/`，可选）——字体、图片等，由后端托管。
+3. **组件声明**（`theme.toml` 的 `[[widgets]]`，可选）——主题自带的 HTML 片段型
+   自定义组件，摆在前台侧栏/页脚等区域（见 §7）；
+4. **自定义 CSS**（`theme.css`，可选）——任意补充样式；
+5. **静态资源**（`assets/`，可选）——字体、图片、组件 HTML 片段等，由后端托管。
 
 关键特性：
 
@@ -81,6 +83,7 @@ background = "222 47% 7%"
 | `[tokens]` | 否 | `key = "字符串"` 的映射；后端**原样下发**不校验 key；缺省为空表 | — |
 | `[tokens_dark]` | 否 | 同上；缺省时响应中不出现该字段 | — |
 | `[[settings]]` | 否 | 设置项声明数组，字段与校验规则见 §6.1 | 422 `invalid_manifest` |
+| `[[widgets]]` | 否 | 主题自带的 HTML 片段型自定义组件声明，字段与校验见 §7.2 | 422 `invalid_manifest` |
 
 manifest 中未知 TOML 字段会被忽略（向前兼容）。主题没有 `min_app_version`、
 hooks、inject 之类字段。
@@ -295,7 +298,117 @@ html[data-setting-glow-accent="false"] ::selection {
 直接 `var()` 引用即可；若要在 `.dark` 下给不同值，选择器优先级压不过内联声明，
 需用 `html.dark[data-...] { ... }` 包一层自定义属性中转，或接受同值。
 
-## 7. theme.css：用法与优先级
+## 7. 组件（widgets）
+
+组件（widget）是摆在前台布局各区域（侧栏 / 左栏 / 右栏 / 页脚）的展示单元。
+reedblog 内置一批 React 组件，主题也可以用 `theme.toml` 的 `[[widgets]]` 声明自带的
+**HTML 片段型**自定义组件（第三方主题无需写前端代码即可扩展侧栏）；站长还能在后台
+「主题设置 → 组件管理」直接新建自定义 HTML 组件。系统级规格见
+[extensibility-contract.md](./extensibility-contract.md)「主题组件」，接口契约见
+[api-contract.md](./api-contract.md)「主题组件」。
+
+组件配置按主题 slug 存**独立的 `theme_widgets` 表**（与 `theme_settings` 同款生命周期：
+切换主题不丢、删除主题连带删除）。表里只存"覆盖行"——没改过的组件用注册表/声明的
+默认值，不占行。之所以不复用 key-value 的 `theme_settings`：组件是多行结构化记录
+（每组件一行 enabled/position/sort_order/config），独立表契约更清晰、可按行校验。
+
+### 7.1 内置组件（7 个）
+
+任何主题都可配置这些内置组件（前端逐一实现，key 固定；参数即 `params`）：
+
+| key | 名称 | 默认启用 | 默认位置 | 参数 |
+|---|---|---|---|---|
+| `recent-posts` | 最新文章 | 是 | sidebar | `title`、`count`（默认 5） |
+| `hot-posts` | 热门文章（按评论数排序） | 否 | sidebar | `title`、`count`（默认 5） |
+| `tag-cloud` | 标签云（字号按文章数加权） | 是 | sidebar | `title`、`count`（默认 20） |
+| `categories` | 分类列表（含文章计数） | 是 | sidebar | `title` |
+| `archive` | 归档（按月） | 否 | sidebar | `title` |
+| `links` | 友情链接（读 links 页数据） | 否 | sidebar | `title`、`count`（默认 10） |
+| `site-info` | 站点信息卡（文章数/评论数/运行天数） | 否 | sidebar | `title` |
+
+新装站点默认启用 `recent-posts` / `tag-cloud` / `categories`，开箱即有合理侧栏。
+`hot-posts` 的数据源是 `GET /api/posts?order=hot`（按 comment_count 降序），
+`site-info` 的数据源是 `GET /api/site/stats`（文章数/评论数/安装时间）。
+
+### 7.2 声明规格（theme.toml `[[widgets]]`）
+
+主题声明自带的 HTML 片段组件（可选；未声明的主题只有内置组件可配）：
+
+```toml
+[[widgets]]
+key = "notice"                # 必填：^[a-z0-9][a-z0-9_-]{0,63}$，主题内唯一，
+                              # 不得与内置 key 冲突（违规 → 上传 422 invalid_manifest）
+label = "公告栏"               # 可选：显示名，缺省用 key
+default_enabled = false       # 可选：默认是否启用（缺省 false）
+default_position = "footer"   # 可选：sidebar|left|right|footer（缺省 sidebar）
+default_sort = 100            # 可选：默认排序（缺省 100）
+
+[[widgets.params]]            # 可选：参数 schema，复用 [[settings]] 的声明形状与校验
+key = "text"                  # （text|textarea|color|select|switch|number + default/options）
+label = "公告文字"
+type = "text"
+default = "欢迎来到本站"
+```
+
+- **HTML 片段路径固定**：`assets/widgets/<key>.html`（经既有 assets 端点托管、每次请求
+  从磁盘读取；文件缺失时 html 为空串，后台可用 `config.html` 覆盖补上）；
+- **`{{param}}` 令牌替换**：片段里的 `{{<参数 key>}}` 在公开接口输出前替换为该参数的
+  生效值（已存值优先、声明 `default` 兜底；**不转义**，与插件注入同信任模型）；
+- 声明违规（key 非法/重复/与内置冲突、`default_position` 越界、`params` 违规）→
+  上传时 422 `invalid_manifest`，主题不会被安装；
+- 主题声明组件在后台**不可删除、只能停用**（它的存在由主题包决定）。
+
+### 7.3 可用 position 与布局降级
+
+规范 position 恒为四值：`sidebar`（侧栏）、`left`（左栏）、`right`（右栏）、
+`footer`（页脚）。**存储与校验与布局无关**；实际渲染区域由前端按当前 `layout` 降级映射：
+
+| layout | 可用区域 | 降级规则 |
+|---|---|---|
+| `topbar-two-column`（默认） | sidebar、footer | left / right 并入 sidebar 列 |
+| `topbar-minimal-three-column` | left、right、footer | sidebar 映射到右栏 |
+
+后台「组件管理」的位置下拉按当前布局给出可用区域选项（并保留组件现值以免丢失）；
+某区域无任何启用组件时，前台**不渲染空壳**（双列侧栏收缩为单列、三列右栏空时降为两列）。
+
+### 7.4 配置接口
+
+公开（未安装门禁白名单；未安装时返回内置默认启用集，保证安装页/首装前台可渲染）：
+
+| 端点 | 说明 |
+|---|---|
+| `GET /api/themes/:slug/widgets` | → `{slug, widgets:[WidgetConfig]}`，仅 **enabled** 组件、按 sort_order ASC；custom 组件 `config.html` 已完成令牌替换；磁盘无此主题 → 404（default 缺盘以内置常量兜底） |
+
+管理（需 Bearer；按 slug 读写，slug 未安装 → 404）：
+
+| 端点 | 说明 |
+|---|---|
+| `GET /api/admin/themes/:slug/widgets` | → `{slug, positions, widgets:[WidgetAdmin]}`，**全量合并列表**（内置注册表 + 主题声明 + 自建，默认值打底、已存行覆盖），每项含 `params` 声明供后台渲染参数编辑器 |
+| `PUT /api/admin/themes/:slug/widgets` | body `{widgets:[WidgetInput]}` → 200 同 GET 形状；**全量替换**语义（未出现的内置/主题组件回默认值、自建组件删除） |
+
+`WidgetInput = {key, kind:"builtin"|"custom", enabled?, position, sort_order?, config?}`
+（enabled 缺省 false、sort_order 缺省 0、config 缺省 {}）。校验失败 → 422 且整体不写库：
+kind=builtin 但 key 未注册 → `unknown_widget`；position 越界 / custom key 非法或与内置冲突 /
+key 重复 / config 含未声明参数 / title（≤200）·html（≤65536 字符）超长 / 组件数超 100 →
+`invalid_value`；widgets 非数组 → `validation_error`。
+
+### 7.5 后台「组件管理」用法
+
+后台「主题设置」页（`/admin/themes/settings`）底部的**组件管理**区：
+
+1. 每行一个组件：**开关**启用/停用、**上移/下移**调整顺序、**位置下拉**选区域；
+2. 点「参数」展开编辑该组件参数（内置：标题/条数；主题声明：声明的 params；
+   custom：HTML 内容 / 覆盖）；
+3. 「新建自定义组件」填名称 + HTML + 位置 → 加入列表（`kind=custom`、`source=admin`，
+   key 自动生成 `custom-<名称>`），可删除；
+4. 「保存组件配置」→ PUT 全量替换，成功后前台侧栏/页脚**即时生效**（同一 SPA 会话内
+   无需刷新；实现见 `frontend/src/lib/widgets.ts` 的 store 与 `loadWidgets`）。
+
+自定义 HTML 组件与插件前端轻注入**共用同一份渲染管线与安全策略**
+（`frontend/src/lib/html-inject.ts`）：不转义、`<script>` 重建为可执行元素，
+仅用于后台/主题包输入的可信片段——`dangerouslySetInnerHTML` 级别的原始注入只出现在这里。
+
+## 8. theme.css：用法与优先级
 
 存在 `theme.css` 时，后端通过 `GET /api/themes/:slug/theme.css` 以
 `text/css; charset=utf-8` 托管（文件不存在 → 404，`ThemeInfo.has_css` 为
@@ -310,13 +423,13 @@ html[data-setting-glow-accent="false"] ::selection {
      因为令牌写在 `documentElement` 的内联样式上，普通规则压不过）；
   2. 覆盖内置样式中**写死的颜色**且不想拼选择器优先级——典型例子是 index.css 给
      文章代码块写死的浅色背景 `.prose :where(pre):not(:where([class~="not-prose"] *))`
-     （暗色主题必须覆盖它，见 §10 示例）；
+     （暗色主题必须覆盖它，见 §11 示例）；
   3. `.dark` 类下的暗色令牌本身就以 `!important` 注入，若要再覆盖需同样使用
      `!important` 且保证选择器优先级不低于 `.dark`。
 - 可以写任意 CSS；前端是 Tailwind CSS 4 + shadcn 风格组件，类名与变量用浏览器
   devtools 即可确认。
 
-## 8. assets/：字体与图片
+## 9. assets/：字体与图片
 
 `assets/` 下的文件经 `GET /api/themes/:slug/assets/<相对路径>` 托管（该端点在
 未安装门禁白名单内，GET 永远可达；文件不存在 → 404）。
@@ -336,7 +449,7 @@ html[data-setting-glow-accent="false"] ::selection {
 - **防目录穿越**：路径做词法清洗（拒绝 `..`、绝对路径、盘符、反斜杠归一化），
   并二次 `canonicalize` 校验目标必须仍在该主题的 `assets/` 内；越界一律 404。
 
-## 9. preview.png、打包与后台管理
+## 10. preview.png、打包与后台管理
 
 ### preview.png
 
@@ -379,9 +492,11 @@ Compress-Archive -Path midnight -DestinationPath midnight.zip
 | `GET /api/admin/themes` | `{"items":[ThemeInfo], "total":int}`（按 slug 字典序） |
 | `POST /api/admin/themes`（multipart，字段 `file` = zip） | 201 `ThemeInfo` |
 | `POST /api/admin/themes/:slug/activate` | 200 `ThemeInfo`（`active:true`） |
-| `DELETE /api/admin/themes/:slug` | 204（连带删除该主题的 theme_settings 行，见 §6） |
+| `DELETE /api/admin/themes/:slug` | 204（连带删除该主题的 theme_settings 与 theme_widgets 行，见 §6 / §7） |
 | `GET /api/admin/themes/active/settings-panel` | 200 激活主题的 `{slug, name, settings, values}`（见 §6.3） |
 | `PUT /api/admin/themes/:slug/settings` | 200 合并后的 `{slug, settings, values}`（见 §6.3） |
+| `GET /api/admin/themes/:slug/widgets` | 200 全量组件配置 `{slug, positions, widgets}`（见 §7.4） |
+| `PUT /api/admin/themes/:slug/widgets` | 200 全量替换保存后的 `{slug, positions, widgets}`（见 §7.4） |
 
 公开端点（无需鉴权）：
 
@@ -392,6 +507,7 @@ Compress-Archive -Path midnight -DestinationPath midnight.zip
 | `GET /api/themes/:slug/preview.png` | `image/png`；不存在 404 |
 | `GET /api/themes/:slug/assets/*path` | 静态资源；不存在/越界 404（白名单） |
 | `GET /api/themes/:slug/settings` | 设置声明 + 生效值（白名单：未安装时 values=声明默认值；见 §6.3） |
+| `GET /api/themes/:slug/widgets` | 生效组件配置（白名单：未安装时返回内置默认启用集；见 §7.4） |
 
 `ThemeInfo` 形状：
 
@@ -421,7 +537,7 @@ Compress-Archive -Path midnight -DestinationPath midnight.zip
 - `GET /api/themes/active` 在磁盘没有任何可用主题时用后端内置的同一份常量兜底，
   前端永远拿得到基础样式。
 
-## 10. 完整示例：暗色主题 midnight
+## 11. 完整示例：暗色主题 midnight
 
 仓库 [`examples/themes/midnight/`](../examples/themes/midnight/) 是一套可直接打包
 安装的完整暗色主题，`[tokens]` 与 `[tokens_dark]` 均覆盖全部 32 个令牌 key，
@@ -504,18 +620,19 @@ background = "222 47% 7%"
 
 ### 安装
 
-打包（见 §9 命令）→ 后台「主题管理」上传 → 激活 → 整站（含后台）立即变为深蓝
+打包（见 §10 命令）→ 后台「主题管理」上传 → 激活 → 整站（含后台）立即变为深蓝
 暗色调；文章代码块、选中色、滚动条随 theme.css 生效。
 
-## 11. 错误码对照表
+## 12. 错误码对照表
 
 | HTTP | code | 触发场景 |
 |---|---|---|
 | 422 | `invalid_package` | 非 multipart / 缺 `file` 字段；zip 解析失败；zip 为空；条目数超 4096；解压后超 64 MB；路径含 `..`/盘符/绝对路径；根层不是单个目录；缺 `theme.toml` |
-| 422 | `invalid_manifest` | `theme.toml` 解析失败；`name` 为空；`slug` 非法或与目录名不一致；`version` 非法 semver；`[[settings]]` 声明违规（key 非法/重复、type 未知、select 缺 options、default 与类型不符等，见 §6.1） |
+| 422 | `invalid_manifest` | `theme.toml` 解析失败；`name` 为空；`slug` 非法或与目录名不一致；`version` 非法 semver；`[[settings]]` 声明违规（key 非法/重复、type 未知、select 缺 options、default 与类型不符等，见 §6.1）；`[[widgets]]` 声明违规（key 非法/重复/与内置冲突、default_position 越界、params 违规，见 §7.2） |
 | 422 | `unknown_setting` | `PUT /api/admin/themes/:slug/settings` 提交了主题未声明的设置 key |
-| 422 | `invalid_value` | 保存设置时值与类型不符：select 越界 / color 非 hex / switch 非布尔 / number 非数字 / text·textarea 超长 |
-| 422 | `validation_error` | 保存设置的请求体缺少 `values` 字段或 `values` 非 JSON 对象 |
+| 422 | `invalid_value` | 保存设置时值与类型不符（select 越界 / color 非 hex / switch 非布尔 / number 非数字 / text·textarea 超长）；或保存组件配置时 position/key 非法、config 含未声明参数、title/html 超长、单主题组件数超 100 |
+| 422 | `unknown_widget` | 保存组件配置时 kind=builtin 的 key 不在内置注册表 |
+| 422 | `validation_error` | 保存设置的请求体缺少 `values` 字段或 `values` 非 JSON 对象；保存组件配置的请求体缺少 `widgets` 数组 |
 | 409 | `builtin_protected` | 上传覆盖 `default`；删除 `default` |
 | 409 | `theme_exists` | 上传的 slug 与已安装主题冲突 |
 | 409 | `theme_active` | 删除当前激活主题（需先切换） |
@@ -524,7 +641,7 @@ background = "222 47% 7%"
 | 503 | `not_installed` | 站点未完成安装向导（管理端点均被门禁拦截） |
 | 500 | `internal_error` | config.toml 不可读（激活时）、磁盘 IO 错误 |
 
-## 12. 调试技巧
+## 13. 调试技巧
 
 1. **主题列表里看不到刚装的主题**：目录名是否合法 slug 且与 `theme.toml` 的
    `slug` 一致？`theme.toml` 是否有 TOML 语法错误？——两者都会被**静默跳过**，
@@ -544,7 +661,7 @@ background = "222 47% 7%"
    扫描磁盘）→ 后台激活 → 改 `theme.toml`/`theme.css` 后刷新页面即可看到效果；
    发布前再打 zip。
 8. **代码块仍是浅色**：内置 index.css 对 `.prose pre` 写死了浅色背景，需在
-   theme.css 中显式覆盖（见 §10）。
+   theme.css 中显式覆盖（见 §11）。
 9. **设置项没出现在面板/上传被拒**：上传报 422 `invalid_manifest` 时看响应
    message（会指明哪个 key 的什么违规）；已装主题的 `[[settings]]` 改动后刷新
    后台设置页即可（声明每次请求从磁盘读取），但**保存值仍按 key 隔离在
@@ -553,3 +670,11 @@ background = "222 47% 7%"
 10. **设置值没生效**：devtools → `<html>` 内联样式应有 `--theme-setting-<key>`
     变量、属性面板应有 `data-setting-*` 与 `data-layout`；没有则检查设置页是否
     保存成功、主题是否激活（公开端点只返回生效值，panel 只服务激活主题）。
+11. **主题声明组件不出现/上传被拒**：上传报 422 `invalid_manifest` 看 message
+    （会指明 `widgets[key]` 的哪项违规）；已装主题改动 `[[widgets]]` 后刷新后台
+    「组件管理」即可（声明每次请求从磁盘读取）。片段不渲染时确认
+    `assets/widgets/<key>.html` 真实存在、`{{param}}` 名称与 `[[widgets.params]]`
+    的 key 一致；后台保存的 `config.html` 覆盖会**优先于**主题文件。
+12. **组件位置在下拉里找不到 / 前台没显示**：position 恒存四值，但当前 layout 只
+    渲染其可用区域（双列 = sidebar/footer，三列 = left/right/footer），非可用位置
+    会按 §7.3 降级映射；某区域全部停用时前台不渲染空壳属正常。

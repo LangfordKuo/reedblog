@@ -2,13 +2,14 @@ import { useEffect, useState, type ReactNode } from "react"
 import { Link, useSearchParams } from "react-router-dom"
 import { CalendarDaysIcon, FolderIcon, MessageSquareIcon } from "lucide-react"
 
-import { BlogSidebar } from "@/components/blog-sidebar"
 import { Pagination } from "@/components/pagination"
 import { BlockSpinner } from "@/components/spinner"
 import { Badge } from "@/components/ui/badge"
+import { WidgetRegion } from "@/components/widgets"
 import { api, errorMessage } from "@/lib/api"
 import { useThemeSettings } from "@/lib/theme-settings"
 import { formatDate } from "@/lib/utils"
+import { useRegionWidgets } from "@/lib/widgets"
 import type { Page, PostPublic } from "@/lib/types"
 
 interface PostFeedProps {
@@ -24,6 +25,8 @@ interface PostFeedProps {
 export function PostFeed({ tag, category, year, month, heading }: PostFeedProps) {
   const { layout } = useThemeSettings()
   const threeColumn = layout === "topbar-minimal-three-column"
+  // 双列布局下侧栏由 WidgetRegion("sidebar") 提供；无启用组件时收缩为单列（不渲染空壳）
+  const hasSidebar = useRegionWidgets("sidebar").length > 0
   const [searchParams, setSearchParams] = useSearchParams()
   const page = Math.max(1, Number(searchParams.get("page")) || 1)
   const [data, setData] = useState<Page<PostPublic> | null>(null)
@@ -71,7 +74,13 @@ export function PostFeed({ tag, category, year, month, heading }: PostFeedProps)
   }
 
   return (
-    <div className={threeColumn ? undefined : "grid gap-8 lg:grid-cols-[minmax(0,1fr)_288px]"}>
+    <div
+      className={
+        threeColumn || !hasSidebar
+          ? undefined
+          : "grid gap-8 lg:grid-cols-[minmax(0,1fr)_288px]"
+      }
+    >
       <div>
         {heading && <h1 className="mb-6 text-2xl font-bold tracking-tight">{heading}</h1>}
         {loading ? (
@@ -99,9 +108,9 @@ export function PostFeed({ tag, category, year, month, heading }: PostFeedProps)
           />
         )}
       </div>
-      {!threeColumn && (
+      {!threeColumn && hasSidebar && (
         <aside className="lg:sticky lg:top-24 lg:self-start">
-          <BlogSidebar />
+          <WidgetRegion region="sidebar" />
         </aside>
       )}
     </div>

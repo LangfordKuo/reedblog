@@ -29,6 +29,30 @@ pub async fn site_info(State(state): State<AppState>) -> Json<SiteInfo> {
     })
 }
 
+/// GET /api/site/stats → SiteStats（契约「站点设置」2026-10-03 组件系统新增）：
+/// published 文章数 / approved 评论数（含页面留言）/ 安装时间（users 表最早 created_at，
+/// 取不到时空串）。站点信息组件数据源；不进未安装门禁白名单，未安装 → 503。
+pub async fn site_stats(State(state): State<AppState>) -> ApiResult<Json<Value>> {
+    let (pool, _db_type) = require_pool(&state).await?;
+    let post_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM posts WHERE status = 'published'")
+            .fetch_one(&pool)
+            .await?;
+    let comment_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM comments WHERE status = 'approved'")
+            .fetch_one(&pool)
+            .await?;
+    let installed_at: String =
+        sqlx::query_scalar("SELECT COALESCE(MIN(created_at), '') FROM users")
+            .fetch_one(&pool)
+            .await?;
+    Ok(Json(json!({
+        "post_count": post_count,
+        "comment_count": comment_count,
+        "installed_at": installed_at,
+    })))
+}
+
 /// POST /api/auth/login → AuthResult；用户名或密码错误 → 401 invalid_credentials
 pub async fn login(
     State(state): State<AppState>,

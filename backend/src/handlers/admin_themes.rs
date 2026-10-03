@@ -147,8 +147,10 @@ pub async fn admin_delete_theme(
             "当前激活主题不可删除，请先切换到其他主题",
         ));
     }
-    // 先删设置行再删目录：目录删除失败可重试（行删除幂等），不会留下"重装后旧设置复活"的窗口
+    // 先删设置/组件行再删目录：目录删除失败可重试（行删除幂等），
+    // 不会留下"重装后旧设置复活"的窗口（契约：卸载即删除设置与组件配置）
     theme_settings::delete_for_theme(&pool, &slug).await?;
+    crate::widgets::delete_for_theme(&pool, &slug).await?;
     std::fs::remove_dir_all(themes::theme_dir(state.themes_dir(), &slug))?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -217,4 +219,49 @@ pub async fn admin_update_theme_settings(
         "settings": decls,
         "values": theme_settings::merged_values(&decls, &stored),
     })))
+}
+
+/// GET /api/admin/themes/:slug/widgets → {slug, positions, widgets}（契约「主题组件」）
+/// 全量合并列表：内置注册表 + 主题声明组件（默认值打底、已存行覆盖）+ 自建 custom 行，
+/// 按 sort_order ASC, key ASC；slug 未安装 → 404
+pub async fn admin_get_theme_widgets(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+) -> ApiResult<Json<Value>> {
+    check_auth(&state, &headers).await?;
+    let (pool, _db_type) = require_pool(&state).await?;
+    if !packages::valid_slug(&slug) || !themes::theme_exists(state.themes_dir(), &slug) {
+        return Err(ApiError::not_found());
+    }
+    // theme.toml 缺失/损坏时宽容处理：主题声明组件视为空（内置组件仍可配）
+    let decls = themes::load_manifest(state.themes_dir(), &slug)
+        .map(|m| m.normalized_widgets())
+        .unwrap_or_default();
+    let rows = crate::widgets::load_rows(&pool, &slug).await?;
+    Ok(Json(crate::widgets::admin_response(&slug, &decls, &rows)))
+}
+
+/// PUT /api/admin/themes/:slug/widgets body {widgets:[WidgetInput]} → 200 同 GET 形状
+/// 全量替换语义：请求数组即最终配置；未出现的内置/主题组件行删除（回默认值）、
+/// 自建 custom 行删除。校验失败（422 unknown_widget / invalid_value /
+/// validation_error）整体不写库；slug 未安装 → 404
+pub async fn admin_put_theme_widgets(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+    Json(body): Json<Value>,
+) -> ApiResult<Json<Value>> {
+    check_auth(&state, &headers).await?;
+    let (pool, _db_type) = require_pool(&state).await?;
+    if !packages::valid_slug(&slug) || !themes::theme_exists(state.themes_dir(), &slug) {
+        return Err(ApiError::not_found());
+    }
+    let decls = themes::load_manifest(state.themes_dir(), &slug)
+        .map(|m| m.normalized_widgets())
+        .unwrap_or_default();
+    let new_rows = crate::widgets::validate_put(&decls, &body)?;
+    crate::widgets::replace_all(&pool, &slug, &new_rows).await?;
+    let rows = crate::widgets::load_rows(&pool, &slug).await?;
+    Ok(Json(crate::widgets::admin_response(&slug, &decls, &rows)))
 }

@@ -26,12 +26,16 @@ import type {
   SiteSettings,
   SiteSettingsAdmin,
   SiteSettingsSaveBody,
+  SiteStats,
   Tag,
   ThemeInfo,
   ThemeSettingValue,
   ThemeSettingsPanel,
   ThemeSettingsResponse,
   UploadResult,
+  WidgetInput,
+  WidgetsAdminResponse,
+  WidgetsPublicResponse,
 } from "./types"
 
 export class ApiError extends Error {
@@ -131,6 +135,8 @@ export interface PostQuery {
   category?: string
   year?: number
   month?: number
+  /** recent（默认）按发布时间；hot 按评论数（热门文章组件数据源） */
+  order?: "recent" | "hot"
 }
 
 export interface SearchPostsQuery {
@@ -161,6 +167,8 @@ export const api = {
   site: () => request<SiteInfo>("GET", "/site"),
   // 站点设置（公开；前台头部/页脚/分页默认值渲染用，不含 base_url）
   siteSettings: () => request<SiteSettings>("GET", "/site/settings"),
+  // 站点统计（公开；站点信息组件数据源）
+  siteStats: () => request<SiteStats>("GET", "/site/stats"),
   posts: (q: PostQuery = {}) => request<Page<PostPublic>>("GET", `/posts${qs(q)}`),
   post: (slug: string) => request<PostDetail>("GET", `/posts/${encodeURIComponent(slug)}`),
   comments: (slug: string) =>
@@ -186,6 +194,9 @@ export const api = {
   // 主题设置生效值（声明 default 与已存值合并；未安装时 default 也可读）
   themeSettings: (slug: string) =>
     request<ThemeSettingsResponse>("GET", `/themes/${encodeURIComponent(slug)}/settings`),
+  // 主题组件生效配置（仅 enabled，按 position+sort 渲染；未安装时=内置默认启用集）
+  themeWidgets: (slug: string) =>
+    request<WidgetsPublicResponse>("GET", `/themes/${encodeURIComponent(slug)}/widgets`),
   frontendInjections: () => request<FrontendInjections>("GET", "/frontend/injections"),
 
   // 鉴权
@@ -276,6 +287,16 @@ export const api = {
         "PUT",
         `/admin/themes/${encodeURIComponent(slug)}/settings`,
         { values },
+      ),
+
+    // 主题组件管理（GET 全量合并配置；PUT 全量替换保存，契约「主题组件」）
+    themeWidgets: (slug: string) =>
+      request<WidgetsAdminResponse>("GET", `/admin/themes/${encodeURIComponent(slug)}/widgets`),
+    updateThemeWidgets: (slug: string, widgets: WidgetInput[]) =>
+      request<WidgetsAdminResponse>(
+        "PUT",
+        `/admin/themes/${encodeURIComponent(slug)}/widgets`,
+        { widgets },
       ),
   },
 }

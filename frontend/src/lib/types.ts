@@ -321,6 +321,72 @@ export interface ThemeSettingsPanel extends ThemeSettingsResponse {
   name: string
 }
 
+// —— 主题组件（契约「主题组件」条款，2026-10-03 新增）——
+
+/** 规范位置枚举（存储与校验与布局无关；布局降级映射见 lib/widgets.ts） */
+export type WidgetPosition = "sidebar" | "left" | "right" | "footer"
+
+/** builtin=前端内置 React 组件；custom=HTML 片段（主题声明或后台自建） */
+export type WidgetKind = "builtin" | "custom"
+
+/** 组件来源：内置注册表 / theme.toml [[widgets]] 声明 / 后台自建 */
+export type WidgetSource = "builtin" | "theme" | "admin"
+
+/** 组件参数生效值（title/count 等；custom 组件含 html） */
+export type WidgetConfigValues = Record<string, string | number | boolean>
+
+/** GET /api/themes/:slug/widgets 单条（公开生效配置，仅 enabled，已按 sort 排序） */
+export interface WidgetPublic {
+  key: string
+  kind: WidgetKind
+  label: string
+  position: WidgetPosition
+  sort_order: number
+  config: WidgetConfigValues
+}
+
+export interface WidgetsPublicResponse {
+  slug: string
+  widgets: WidgetPublic[]
+}
+
+/** GET/PUT /api/admin/themes/:slug/widgets 单条（全量合并列表，含停用） */
+export interface WidgetAdminItem {
+  key: string
+  kind: WidgetKind
+  label: string
+  source: WidgetSource
+  enabled: boolean
+  position: WidgetPosition
+  sort_order: number
+  config: WidgetConfigValues
+  /** 参数声明（复用主题设置声明形状；后台自建 custom 为空数组） */
+  params: ThemeSettingDecl[]
+}
+
+export interface WidgetsAdminResponse {
+  slug: string
+  positions: WidgetPosition[]
+  widgets: WidgetAdminItem[]
+}
+
+/** PUT /api/admin/themes/:slug/widgets 入参单项（全量替换语义） */
+export interface WidgetInput {
+  key: string
+  kind: WidgetKind
+  enabled: boolean
+  position: WidgetPosition
+  sort_order: number
+  config: WidgetConfigValues
+}
+
+/** GET /api/site/stats 响应（站点信息组件数据源） */
+export interface SiteStats {
+  post_count: number
+  comment_count: number
+  installed_at: string
+}
+
 export interface InjectionFragment {
   plugin: string
   html: string

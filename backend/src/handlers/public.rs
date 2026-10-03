@@ -111,6 +111,18 @@ pub async fn list_posts(
         params.push(format!("{month:02}"));
     }
 
+    // 排序：recent（默认）按 published_at DESC；hot 按 comment_count DESC, published_at DESC
+    // （comment_count 为 PUBLIC_POST_COLUMNS 中的 SELECT 别名，SQLite/MySQL 均支持按别名排序）
+    let order_by = match q.order.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        None | Some("recent") => "p.published_at DESC",
+        Some("hot") => "comment_count DESC, p.published_at DESC",
+        Some(other) => {
+            return Err(ApiError::validation(format!(
+                "order '{other}' 非法（须为 recent 或 hot）"
+            )))
+        }
+    };
+
     // total
     let count_sql = format!(
         "SELECT COUNT(*) FROM posts p LEFT JOIN categories c ON c.id = p.category_id {where_sql}"
@@ -125,7 +137,7 @@ pub async fn list_posts(
     let list_sql = format!(
         "SELECT {PUBLIC_POST_COLUMNS} FROM posts p \
          LEFT JOIN categories c ON c.id = p.category_id {where_sql} \
-         ORDER BY p.published_at DESC LIMIT ? OFFSET ?"
+         ORDER BY {order_by} LIMIT ? OFFSET ?"
     );
     let mut lq = sqlx::query(&list_sql);
     for prm in &params {

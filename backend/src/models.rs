@@ -413,6 +413,10 @@ pub struct PostsQuery {
     pub year: Option<i64>,
     #[serde(default)]
     pub month: Option<i64>,
+    /// recent（默认）按 published_at DESC；hot 按 comment_count DESC, published_at DESC
+    /// （热门文章组件数据源）；其他值 → 422 validation_error
+    #[serde(default)]
+    pub order: Option<String>,
 }
 
 /// GET /api/search 查询参数；q 缺失或 trim 后为空 → 400 validation_error

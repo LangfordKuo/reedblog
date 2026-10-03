@@ -221,11 +221,64 @@ options = [                       # select 必填且非空；其余类型必须�
 **生命周期**：主题设置按 slug 隔离——切换激活主题不清除任何主题的设置；
 **删除（卸载）主题时连带删除其 theme_settings 行**（重装后回到声明默认值）。
 
+### 主题组件（widgets，2026-10-03 新增）
+
+组件（widget）= 前台布局区域（侧栏/左栏/右栏/页脚）中可启用、可排序、可配参数的
+展示单元。接口与存储契约见 api-contract.md「主题组件」；本节定义主题包侧的声明规格。
+
+**三类组件**：
+1. **内置组件**（kind=builtin）：reedblog 前端逐一实现的 React 组件，key 固定为
+   `recent-posts` / `hot-posts` / `tag-cloud` / `categories` / `archive` / `links` /
+   `site-info`；任何主题都可配置它们（启用/位置/排序/参数），后端注册表提供
+   参数 schema（params）与默认值；
+2. **主题声明组件**（kind=custom、source=theme）：主题在 theme.toml 用 `[[widgets]]`
+   声明、HTML 片段放在主题包 `assets/widgets/<key>.html`——第三方主题无需前端实现
+   即可带自定义组件（HTML 片段型兜底）；
+3. **后台自建组件**（kind=custom、source=admin）：管理员在后台「主题设置 → 组件管理」
+   直接创建（名称 + HTML 内容 + 位置 + 排序），HTML 存 config.html，可增删改。
+
+三类组件**统一走同一份渲染管线与安全策略**：custom 组件的 HTML 由前端以
+template + DOM 注入方式渲染（`<script>` 重建为可执行元素），与插件前端轻注入同款
+（不转义，站长/主题作者对自己内容负责，WordPress 同信任模型）；
+`dangerouslySetInnerHTML` 级别的原始注入仅用于此类后台/主题包输入的片段。
+
+**theme.toml `[[widgets]]` 声明**（可选；未声明的主题只有内置组件可配）：
+
+```toml
+[[widgets]]
+key = "notice"                # 必填：^[a-z0-9][a-z0-9_-]{0,63}$，主题内唯一，
+                              # 不得与内置组件 key 冲突（违规 → 上传 422 invalid_manifest）
+label = "公告栏"               # 可选：显示名，缺省用 key
+default_enabled = false       # 可选：默认是否启用（缺省 false）
+default_position = "footer"   # 可选：默认位置（sidebar|left|right|footer，缺省 sidebar）
+default_sort = 50             # 可选：默认排序（缺省 100）
+
+[[widgets.params]]            # 可选：参数 schema，复用 [[settings]] 的声明形状与校验
+key = "text"                  # （text|textarea|color|select|switch|number + default/options）
+label = "公告文字"
+type = "text"
+default = "欢迎来到本站"
+```
+
+- HTML 片段路径固定：`assets/widgets/<key>.html`（经既有 assets 端点托管；文件缺失时
+  html 为空串，后台可用 config.html 覆盖补上）；
+- **`{{param}}` 令牌替换**：片段中的 `{{<参数 key>}}` 在公开接口输出 config.html 时
+  替换为该参数的生效值（已存值优先、声明 default 兜底；不转义）；
+- 声明校验（上传 zip 与后端解析共用）：key 非法/重复/与内置冲突、default_position
+  越界、params 违规（同 [[settings]] 规则）→ 422 `invalid_manifest`；
+- 主题声明组件的参数编辑、启用/位置/排序与内置组件在后台同一面板操作；
+  **删除主题时其 widgets 配置行连带删除**（同 theme_settings 生命周期）。
+
 ### 主题管理 API
 公开：
 - `GET /api/themes/active` → `{slug, name, tokens:{...}, tokens_dark?:{...}, css_url:"/api/themes/:slug/theme.css"|null, preview_url?:str}`（未安装门禁白名单：未安装时返回 default 主题令牌，保证安装页有样式）
 - `GET /api/themes/:slug/theme.css` → `text/css`（不存在 404）
 - `GET /api/themes/:slug/assets/*path` → 静态文件（不存在 404；防目录穿越）
+- `GET /api/themes/:slug/widgets` → 生效组件配置（白名单；完整条款见 api-contract.md「主题组件」）
+
+组件管理（需 Bearer；完整条款见 api-contract.md「主题组件」）：
+- `GET /api/admin/themes/:slug/widgets` → 全量组件配置（默认值合并已存行）
+- `PUT /api/admin/themes/:slug/widgets` → 全量替换保存（校验失败 422，不写库）
 
 管理（需 Bearer）：
 - `GET /api/admin/themes` → `{"items":[ThemeInfo], "total":int}`
@@ -248,6 +301,8 @@ not_installed 中间件白名单**新增**（未安装也可访问）：
 - `GET /api/themes/active`、`GET /api/themes/:slug/theme.css`、`GET /api/themes/:slug/assets/*`
 - `GET /api/themes/:slug/settings`（2026-10-03 主题设置新增：未安装时 values=声明默认值，
   保证安装页能应用 default 主题的布局/配色设置；磁盘不存在的 slug 仍 404）
+- `GET /api/themes/:slug/widgets`（2026-10-03 组件系统新增：未安装时返回内置组件默认
+  启用集，保证安装页/首装前台可渲染；磁盘不存在的 slug 仍 404）
 - `GET /api/frontend/injections`
 
 （原有白名单：`GET /api/health`、`GET /api/install/status`、`POST /api/install` 不变。）
@@ -269,6 +324,12 @@ active = "default"
   主键 (theme_slug, key)，按主题 slug 隔离；value 为规范化 TEXT，
   时间戳沿用全库 RFC3339 UTC 文本惯例；SQLite/MySQL 共用 SQL（Any 驱动，
   `key` 列名用反引号引用——双方言均支持）。删除主题时连带删除其行。
+- `theme_widgets`（2026-10-03 组件系统新增）：id 自增主键，theme_slug, widget_key
+  （UNIQUE (theme_slug, widget_key)）, enabled, position, sort_order, config（JSON 对象
+  TEXT）, created_at, updated_at。**只存覆盖行**：内置/主题声明组件的默认值来自
+  后端注册表与 theme.toml 声明，未保存过的组件不占行；按主题 slug 隔离，
+  删除主题时连带删除其行。时间戳沿用全库 RFC3339 UTC 文本惯例；
+  SQLite/MySQL 共用 SQL（Any 驱动）。
 
 ## 迁移注意
 - 新增 `plugins` / `theme_settings` 表走 sqlx migration（SQLite + MySQL 各一份），migration 需对**已有安装**幂等（新表，不影响旧数据）。

@@ -2,23 +2,25 @@ import { useEffect } from "react"
 import { Outlet } from "react-router-dom"
 
 import { BlogLeftNav } from "@/components/blog-left-nav"
-import { BlogSidebar } from "@/components/blog-sidebar"
 import { MinimalHeader } from "@/components/minimal-header"
 import { PluginInjections } from "@/components/plugin-injections"
 import { SiteFooter } from "@/components/site-footer"
 import { SiteHeader } from "@/components/site-header"
+import { WidgetRegion } from "@/components/widgets"
 import { useSite } from "@/hooks/use-site"
 import { useThemeSettings } from "@/lib/theme-settings"
 import type { SiteSettings } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { useRegionWidgets } from "@/lib/widgets"
 
 /**
  * 公开站点布局壳：按激活主题的 layout 设置分派两套骨架
  * （扩展契约「主题设置项-内置布局设置」，data-layout 同步写在 <html> 上）：
- * - topbar-two-column（默认）：顶栏导航 + 主内容/侧栏双列（侧栏由各页面自带）；
+ * - topbar-two-column（默认）：顶栏导航 + 主内容/侧栏双列（侧栏由各页面自带的
+ *   WidgetRegion("sidebar") 渲染）；页脚区域由布局壳统一渲染；
  * - topbar-minimal-three-column：极简顶栏（搜索/管理入口），正文左中右三列
- *   （左：导航/分类，中：页面内容，右：侧栏信息）。
- * 其余页面（详情/归档等）复用同一布局壳。
+ *   （左：导航 + left 区域组件，中：页面内容，右：right/sidebar 降级组件）。
+ * 各区域无启用组件时不渲染空壳（WidgetRegion 返回 null；三列右栏空时收缩为两列）。
  */
 export function SiteLayout() {
   const { site } = useSite()
@@ -60,30 +62,46 @@ function TwoColumnShell({ site }: { site: SiteSettings | null }) {
       >
         <Outlet />
       </main>
+      <WidgetRegion
+        region="footer"
+        className={cn("mx-auto w-full px-4 pb-8", wide ? "max-w-7xl" : "max-w-5xl")}
+      />
       <SiteFooter site={site} wide={wide} />
     </div>
   )
 }
 
-/** 极简顶栏 + 左中右三列骨架（页面内容自带的侧栏在此布局下隐藏，右栏统一提供） */
+/** 极简顶栏 + 左中右三列骨架（左栏含导航与 left 组件，右栏为 sidebar/right 降级组件） */
 function ThreeColumnShell({ site }: { site: SiteSettings | null }) {
+  const hasRight = useRegionWidgets("right").length > 0
   return (
     <div className="flex min-h-screen flex-col bg-background">
       <PluginInjections />
       <MinimalHeader site={site} />
       <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-8">
-        <div className="grid gap-8 lg:grid-cols-[188px_minmax(0,1fr)_288px]">
-          <aside className="lg:sticky lg:top-20 lg:self-start">
+        <div
+          className={cn(
+            "grid gap-8",
+            hasRight
+              ? "lg:grid-cols-[188px_minmax(0,1fr)_288px]"
+              : "lg:grid-cols-[188px_minmax(0,1fr)]",
+          )}
+        >
+          <aside className="flex flex-col gap-6 lg:sticky lg:top-20 lg:self-start">
             <BlogLeftNav />
+            <WidgetRegion region="left" />
           </aside>
           <div className="min-w-0">
             <Outlet />
           </div>
-          <aside className="lg:sticky lg:top-20 lg:self-start">
-            <BlogSidebar />
-          </aside>
+          {hasRight && (
+            <aside className="lg:sticky lg:top-20 lg:self-start">
+              <WidgetRegion region="right" />
+            </aside>
+          )}
         </div>
       </main>
+      <WidgetRegion region="footer" className="mx-auto w-full max-w-7xl px-4 pb-8" />
       <SiteFooter site={site} wide />
     </div>
   )

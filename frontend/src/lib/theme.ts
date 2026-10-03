@@ -1,6 +1,7 @@
 import { api } from "./api"
 import { loadThemeSettings } from "./theme-settings"
 import type { ThemeTokens } from "./types"
+import { loadWidgets } from "./widgets"
 
 // 已知令牌 key 集合（下划线形式，对应 index.css 的 shadcn 变量体系）。
 // 契约规定：未知 key 忽略（向前兼容）；缺失 key 不写内联变量，
@@ -123,6 +124,8 @@ export async function applyActiveTheme(): Promise<string | null> {
     applyDarkTokens(theme.tokens_dark)
     applyThemeCss(theme.css_url)
     await loadThemeSettings(theme.slug)
+    // 组件配置随激活主题一并加载（失败静默回退空，各区域不渲染空壳）
+    await loadWidgets(theme.slug)
     return theme.slug
   } catch {
     return null
