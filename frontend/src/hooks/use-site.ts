@@ -1,22 +1,22 @@
 import { useEffect, useState } from "react"
 
-import { loadSite } from "@/lib/site"
-import type { SiteInfo } from "@/lib/types"
+import { loadSiteSettings } from "@/lib/site"
+import type { SiteSettings } from "@/lib/types"
 
-/** 加载站点信息（模块级缓存），并同步 document.title */
-export function useSite(): { site: SiteInfo | null } {
-  const [site, setSite] = useState<SiteInfo | null>(null)
+/** 加载站点设置（模块级缓存），并同步 document.title */
+export function useSite(): { site: SiteSettings | null } {
+  const [site, setSite] = useState<SiteSettings | null>(null)
 
   useEffect(() => {
     let cancelled = false
-    loadSite()
+    loadSiteSettings()
       .then((s) => {
         if (cancelled) return
         setSite(s)
         if (s.title) document.title = s.title
       })
       .catch(() => {
-        // 站点信息加载失败不阻塞页面，header 显示默认名
+        // 站点设置加载失败不阻塞页面，header 显示默认名
       })
     return () => {
       cancelled = true

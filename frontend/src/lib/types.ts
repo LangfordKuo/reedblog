@@ -6,6 +6,32 @@ export interface SiteInfo {
   installed: boolean
 }
 
+/** GET /api/site/settings 响应（契约 SiteSettingsPublic；不含 base_url 等敏感字段） */
+export interface SiteSettings {
+  title: string
+  subtitle: string
+  description: string
+  icp_number: string
+  footer_text: string
+  per_page: number
+}
+
+/** GET/PUT /api/admin/site/settings 响应（契约 SiteSettingsAdmin） */
+export interface SiteSettingsAdmin extends SiteSettings {
+  base_url: string
+}
+
+/** PUT /api/admin/site/settings 请求体（全量更新语义） */
+export interface SiteSettingsSaveBody {
+  title: string
+  subtitle?: string
+  description?: string
+  icp_number?: string
+  footer_text?: string
+  per_page: number
+  base_url?: string
+}
+
 export interface NamedRef {
   id: number
   name: string

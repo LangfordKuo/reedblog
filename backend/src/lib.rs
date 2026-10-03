@@ -9,6 +9,7 @@ pub mod models;
 pub mod packages;
 pub mod plugins;
 pub mod seed;
+pub mod settings;
 pub mod state;
 pub mod themes;
 
@@ -24,7 +25,7 @@ use config::Config;
 use error::ApiError;
 use handlers::{
     admin_comments, admin_plugins, admin_posts, admin_terms, admin_themes, feed, frontend, install,
-    public, site_auth, uploads,
+    public, site_auth, site_settings, uploads,
 };
 use state::{connect_pool, AppState};
 
@@ -72,6 +73,8 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/install", post(install::install))
         // 站点公开接口
         .route("/site", get(site_auth::site_info))
+        // 站点设置（公开；不进未安装门禁白名单，未安装 503）
+        .route("/site/settings", get(site_settings::public_site_settings))
         .route("/posts", get(public::list_posts))
         .route("/posts/{slug}", get(public::get_post))
         .route(
@@ -121,6 +124,12 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
             "/admin/comments/{id}",
             axum::routing::put(admin_comments::admin_update_comment)
                 .delete(admin_comments::admin_delete_comment),
+        )
+        // 管理：站点设置
+        .route(
+            "/admin/site/settings",
+            get(site_settings::admin_get_site_settings)
+                .put(site_settings::admin_update_site_settings),
         )
         // 管理：图片上传（请求体上限 = 配置文件大小上限 + multipart 开销余量；
         // 超限文件由 handler 逐块计数报 422 file_too_large）

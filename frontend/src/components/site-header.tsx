@@ -5,7 +5,7 @@ import { MoonIcon, SearchIcon, SunIcon } from "lucide-react"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { isDarkRendered, setColorMode } from "@/lib/color-mode"
-import type { SiteInfo } from "@/lib/types"
+import type { SiteSettings } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
@@ -14,7 +14,7 @@ const navLinkClass = ({ isActive }: { isActive: boolean }) =>
     isActive ? "bg-accent font-medium text-accent-foreground" : "text-muted-foreground",
   )
 
-export function SiteHeader({ site }: { site: SiteInfo | null }) {
+export function SiteHeader({ site }: { site: SiteSettings | null }) {
   const navigate = useNavigate()
   const [searchOpen, setSearchOpen] = useState(false)
   const [keyword, setKeyword] = useState("")

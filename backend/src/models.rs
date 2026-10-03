@@ -121,6 +121,47 @@ pub struct UploadResult {
     pub filename: String,
 }
 
+/// GET /api/site/settings 响应（契约 SiteSettingsPublic；不含 base_url 等敏感字段）
+#[derive(Debug, Clone, Serialize)]
+pub struct SiteSettingsPublic {
+    pub title: String,
+    pub subtitle: String,
+    pub description: String,
+    pub icp_number: String,
+    pub footer_text: String,
+    pub per_page: i64,
+}
+
+/// GET/PUT /api/admin/site/settings 响应（契约 SiteSettingsAdmin = Public + base_url）
+#[derive(Debug, Clone, Serialize)]
+pub struct SiteSettingsAdmin {
+    #[serde(flatten)]
+    pub public: SiteSettingsPublic,
+    pub base_url: String,
+}
+
+impl From<&crate::settings::SiteSettings> for SiteSettingsPublic {
+    fn from(s: &crate::settings::SiteSettings) -> Self {
+        Self {
+            title: s.title.clone(),
+            subtitle: s.subtitle.clone(),
+            description: s.description.clone(),
+            icp_number: s.icp_number.clone(),
+            footer_text: s.footer_text.clone(),
+            per_page: s.per_page,
+        }
+    }
+}
+
+impl From<&crate::settings::SiteSettings> for SiteSettingsAdmin {
+    fn from(s: &crate::settings::SiteSettings) -> Self {
+        Self {
+            public: s.into(),
+            base_url: s.base_url.clone(),
+        }
+    }
+}
+
 /// 分页响应统一形状
 #[derive(Debug, Clone, Serialize)]
 pub struct Page<T: Serialize> {
@@ -210,6 +251,39 @@ where
     T: serde::Deserialize<'de>,
 {
     Ok(Some(Option::deserialize(deserializer)?))
+}
+
+/// PUT /api/admin/site/settings 请求体（全量更新语义；可选字段缺失/null 视为空串）
+#[derive(Debug, Clone, Deserialize)]
+pub struct SiteSettingsBody {
+    pub title: String,
+    #[serde(default)]
+    pub subtitle: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub icp_number: Option<String>,
+    #[serde(default)]
+    pub footer_text: Option<String>,
+    pub per_page: i64,
+    #[serde(default)]
+    pub base_url: Option<String>,
+}
+
+impl SiteSettingsBody {
+    /// 转成领域对象（统一 trim；base_url 去尾 /），校验由 settings::validate 负责
+    pub fn into_settings(self) -> crate::settings::SiteSettings {
+        let trim = |v: Option<String>| v.unwrap_or_default().trim().to_string();
+        crate::settings::SiteSettings {
+            title: self.title.trim().to_string(),
+            subtitle: trim(self.subtitle),
+            description: trim(self.description),
+            icp_number: trim(self.icp_number),
+            footer_text: self.footer_text.unwrap_or_default().trim().to_string(),
+            per_page: self.per_page,
+            base_url: trim(self.base_url).trim_end_matches('/').to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

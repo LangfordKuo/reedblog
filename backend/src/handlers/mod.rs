@@ -9,4 +9,5 @@ pub mod helpers;
 pub mod install;
 pub mod public;
 pub mod site_auth;
+pub mod site_settings;
 pub mod uploads;

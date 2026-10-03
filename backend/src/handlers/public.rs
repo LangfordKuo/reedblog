@@ -59,13 +59,29 @@ const PUBLIC_POST_COLUMNS: &str = "p.id, p.title, p.slug, p.excerpt, p.content_m
      c.name AS category_name, p.published_at, \
      (SELECT COUNT(*) FROM comments m WHERE m.post_id = p.id AND m.status = 'approved') AS comment_count";
 
+/// 公开列表分页归一化：显式 per_page 优先（钳 1~100）；未传时默认值取站点设置的
+/// per_page（契约「总则-分页」2026-10-03 条款）
+async fn normalize_public_paging(
+    pool: &AnyPool,
+    state: &AppState,
+    page: Option<i64>,
+    per_page: Option<i64>,
+) -> ApiResult<(i64, i64)> {
+    if per_page.is_some() {
+        return Ok(normalize_paging(page, per_page));
+    }
+    let settings = crate::settings::load(pool, state).await?;
+    let (page, _) = normalize_paging(page, None);
+    Ok((page, settings.per_page.clamp(1, 100)))
+}
+
 /// GET /api/posts?page&per_page&tag&category&year&month → 分页 [PostPublic]
 pub async fn list_posts(
     State(state): State<AppState>,
     Query(q): Query<PostsQuery>,
 ) -> ApiResult<Json<Page<PostPublic>>> {
     let (pool, _db_type) = require_pool(&state).await?;
-    let (page, per_page) = normalize_paging(q.page, q.per_page);
+    let (page, per_page) = normalize_public_paging(&pool, &state, q.page, q.per_page).await?;
 
     let mut where_sql = String::from("WHERE p.status = 'published'");
     let mut params: Vec<String> = Vec::new();
@@ -153,7 +169,7 @@ pub async fn search_posts(
             "q 不能为空",
         ));
     }
-    let (page, per_page) = normalize_paging(q.page, q.per_page);
+    let (page, per_page) = normalize_public_paging(&pool, &state, q.page, q.per_page).await?;
 
     let mut where_sql = String::from("WHERE p.status = 'published'");
     let mut params: Vec<String> = Vec::new();

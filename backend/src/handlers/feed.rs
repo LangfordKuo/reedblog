@@ -2,8 +2,9 @@
 //! - GET /api/feed.xml    → 最新 20 篇 published 文章，RFC 822 pubDate，全文本 XML 转义
 //! - GET /api/sitemap.xml → 首页 + 全部 published 文章（lastmod=updated_at）+ 标签/分类/归档索引
 //!
-//! 站点绝对 URL：config.toml [server] base_url 非空优先（去尾 /）；
-//! 为空从请求头推导（X-Forwarded-Proto/X-Forwarded-Host 优先，反代场景；再回退 Host）。
+//! 站点绝对 URL（契约「RSS 与 sitemap」优先级）：站点设置 base_url → config.toml
+//! [server] base_url（均去尾 /）→ 请求头推导（X-Forwarded-Proto/X-Forwarded-Host 优先，
+//! 反代场景；再回退 Host）。channel title/description 读站点设置。
 
 use axum::extract::State;
 use axum::http::{header, HeaderMap};
@@ -56,13 +57,14 @@ fn header_value(headers: &HeaderMap, name: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// 站点绝对 URL（无尾斜杠）。base_url 配置优先；否则按请求头推导：
-/// scheme 仅接受 http/https（防头注入），host 取 X-Forwarded-Host 首个值 → Host。
-pub fn site_base_url(state: &AppState, headers: &HeaderMap) -> String {
-    let configured = state.configured_base_url();
-    let configured = configured.trim().trim_end_matches('/');
-    if !configured.is_empty() {
-        return configured.to_string();
+/// 站点绝对 URL（无尾斜杠）。优先级：站点设置 base_url → config.toml [server] base_url
+/// → 请求头推导（scheme 仅接受 http/https 防头注入，host 取 X-Forwarded-Host 首个值 → Host）。
+pub fn site_base_url(settings_base: &str, config_base: &str, headers: &HeaderMap) -> String {
+    for candidate in [settings_base, config_base] {
+        let trimmed = candidate.trim().trim_end_matches('/');
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
     }
     let scheme = header_value(headers, "x-forwarded-proto")
         .and_then(|v| v.split(',').next().map(|s| s.trim().to_ascii_lowercase()))
@@ -88,8 +90,9 @@ fn post_url(base: &str, slug: &str) -> String {
 /// GET /api/feed.xml → RSS 2.0（application/rss+xml; charset=utf-8）
 pub async fn feed_xml(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Response> {
     let (pool, _db_type) = require_pool(&state).await?;
-    let base = site_base_url(&state, &headers);
-    let rt = state.runtime().await;
+    // channel 标题/描述与绝对 URL 均读站点设置（契约「站点设置-联动读取」条款）
+    let settings = crate::settings::load(&pool, &state).await?;
+    let base = site_base_url(&settings.base_url, &state.configured_base_url(), &headers);
 
     let rows = sqlx::query(
         "SELECT title, slug, excerpt, content_md, published_at FROM posts \
@@ -99,10 +102,10 @@ pub async fn feed_xml(State(state): State<AppState>, headers: HeaderMap) -> ApiR
     .fetch_all(&pool)
     .await?;
 
-    let description = if rt.site_subtitle.trim().is_empty() {
-        rt.site_title.clone()
+    let description = if settings.subtitle.trim().is_empty() {
+        settings.title.clone()
     } else {
-        rt.site_subtitle.clone()
+        settings.subtitle.clone()
     };
 
     let mut xml = String::from(
@@ -110,7 +113,7 @@ pub async fn feed_xml(State(state): State<AppState>, headers: HeaderMap) -> ApiR
     );
     xml.push_str(&format!(
         "    <title>{}</title>\n",
-        xml_escape(&rt.site_title)
+        xml_escape(&settings.title)
     ));
     xml.push_str(&format!("    <link>{}</link>\n", xml_escape(&base)));
     xml.push_str(&format!(
@@ -165,7 +168,8 @@ pub async fn feed_xml(State(state): State<AppState>, headers: HeaderMap) -> ApiR
 /// 首页 + 全部 published 文章（lastmod=updated_at，W3C datetime）+ 标签/分类/归档索引
 pub async fn sitemap_xml(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Response> {
     let (pool, _db_type) = require_pool(&state).await?;
-    let base = site_base_url(&state, &headers);
+    let settings = crate::settings::load(&pool, &state).await?;
+    let base = site_base_url(&settings.base_url, &state.configured_base_url(), &headers);
 
     let rows = sqlx::query(
         "SELECT slug, updated_at FROM posts \

@@ -12,7 +12,6 @@ import { Input } from "@/components/ui/input"
 import { api, errorMessage } from "@/lib/api"
 import type { Page, SearchResult } from "@/lib/types"
 
-const PER_PAGE = 10
 /** 与后端 split_search_terms 一致：空白切分、上限 8 个词条（多余忽略） */
 const MAX_TERMS = 8
 
@@ -57,7 +56,8 @@ export default function SearchPage() {
     let cancelled = false
     setLoading(true)
     api
-      .search({ q, page, per_page: PER_PAGE })
+      // 不传 per_page：由后端按站点设置的 per_page 默认分页（响应回显实际值）
+      .search({ q, page })
       .then((d) => {
         if (!cancelled) {
           setData(d)

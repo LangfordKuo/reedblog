@@ -12,6 +12,7 @@ import AdminLoginPage from "@/pages/admin/login"
 import AdminPluginsPage from "@/pages/admin/plugins"
 import AdminPostEditPage from "@/pages/admin/post-edit"
 import AdminPostsPage from "@/pages/admin/posts"
+import AdminSettingsPage from "@/pages/admin/settings"
 import AdminTagsPage from "@/pages/admin/tags"
 import AdminThemesPage from "@/pages/admin/themes"
 import ArchivePage from "@/pages/archive"
@@ -60,6 +61,7 @@ export default function App() {
               <Route path="comments" element={<AdminCommentsPage />} />
               <Route path="plugins" element={<AdminPluginsPage />} />
               <Route path="themes" element={<AdminThemesPage />} />
+              <Route path="settings" element={<AdminSettingsPage />} />
             </Route>
           </Route>
 

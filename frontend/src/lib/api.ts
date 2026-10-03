@@ -19,6 +19,9 @@ import type {
   PostStatus,
   SearchResult,
   SiteInfo,
+  SiteSettings,
+  SiteSettingsAdmin,
+  SiteSettingsSaveBody,
   Tag,
   ThemeInfo,
   UploadResult,
@@ -149,6 +152,8 @@ export const api = {
 
   // 站点公开接口
   site: () => request<SiteInfo>("GET", "/site"),
+  // 站点设置（公开；前台头部/页脚/分页默认值渲染用，不含 base_url）
+  siteSettings: () => request<SiteSettings>("GET", "/site/settings"),
   posts: (q: PostQuery = {}) => request<Page<PostPublic>>("GET", `/posts${qs(q)}`),
   post: (slug: string) => request<PostDetail>("GET", `/posts/${encodeURIComponent(slug)}`),
   comments: (slug: string) =>
@@ -203,6 +208,11 @@ export const api = {
       form.append("file", file)
       return requestForm<UploadResult>("POST", "/admin/uploads", form)
     },
+
+    // 站点设置（管理端全字段，含 base_url）
+    siteSettings: () => request<SiteSettingsAdmin>("GET", "/admin/site/settings"),
+    updateSiteSettings: (body: SiteSettingsSaveBody) =>
+      request<SiteSettingsAdmin>("PUT", "/admin/site/settings", body),
 
     // 插件管理（multipart 上传 zip，字段名 file）
     plugins: () => request<Items<PluginInfo>>("GET", "/admin/plugins"),

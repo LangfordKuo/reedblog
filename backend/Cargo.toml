@@ -24,6 +24,7 @@ jsonwebtoken = "9"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 rand = "0.8"
 urlencoding = "2"
+url = "2"
 rhai = { version = "1", features = ["sync"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }

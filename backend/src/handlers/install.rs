@@ -166,6 +166,17 @@ pub async fn install(
         eprintln!("[reedblog] warning: 示例数据注入失败（不影响安装完成）: {e}");
     }
 
+    // ---- 4.6 写入站点设置默认值（契约「站点设置-默认值」条款：安装时写入；
+    //      title/subtitle 取安装请求，base_url 初始值取 config.toml [server] base_url）----
+    let defaults = crate::settings::install_defaults(
+        &cfg.site.title,
+        cfg.site.subtitle.as_deref().unwrap_or_default(),
+        &cfg.server.base_url,
+    );
+    crate::settings::save_on_conn(&mut probe, &defaults)
+        .await
+        .map_err(|e| ApiError::internal(format!("写入站点设置默认值失败: {e}")))?;
+
     // ---- 5. 建立正式连接池，进程内切换到已安装状态 ----
     drop(probe);
     let pool = AnyPoolOptions::new()

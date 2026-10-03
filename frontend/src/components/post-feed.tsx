@@ -10,8 +10,6 @@ import { api, errorMessage } from "@/lib/api"
 import { formatDate } from "@/lib/utils"
 import type { Page, PostPublic } from "@/lib/types"
 
-const PER_PAGE = 10
-
 interface PostFeedProps {
   tag?: string
   category?: string
@@ -42,7 +40,8 @@ export function PostFeed({ tag, category, year, month, heading }: PostFeedProps)
     let cancelled = false
     setLoading(true)
     api
-      .posts({ page, per_page: PER_PAGE, tag, category, year, month })
+      // 不传 per_page：由后端按站点设置的 per_page 默认分页（响应回显实际值）
+      .posts({ page, tag, category, year, month })
       .then((d) => {
         if (!cancelled) {
           setData(d)

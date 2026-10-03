@@ -7,7 +7,8 @@
 - 全部 JSON，UTF-8。时间戳一律 RFC3339（UTC），如 `2026-10-02T12:00:00Z`
 - 错误统一形状：`{"error": {"code": "<snake_case>", "message": "<人类可读>"}}`，配合恰当 HTTP 状态码
 - 鉴权：JWT Bearer。请求头 `Authorization: Bearer ***`
-- 分页响应统一：`{"items": [...], "total": <int>, "page": <int>, "per_page": <int>}`；分页参数 `page`（默认1）、`per_page`（默认10，上限100）
+- 分页响应统一：`{"items": [...], "total": <int>, "page": <int>, "per_page": <int>}`；分页参数 `page`（默认1）、`per_page`（默认10，上限100）。
+  公开文章列表（`/api/posts`、`/api/search`）**未传 per_page 时默认值取站点设置的 per_page**（2026-10-03 定，见「站点设置」）；显式传入的 per_page 优先，仍钳制 1~100
 
 ## 数据形状
 ```
@@ -26,6 +27,8 @@ CommentAdmin = {id, post_id, post_title, author_name, email|null, content,
                 status: "approved"|"hidden", created_at}
 AuthResult   = {token, username, expires_at}
 UploadResult = {url, size: <字节数>, filename: <原始文件名回显>}
+SiteSettingsPublic = {title, subtitle, description, icp_number, footer_text, per_page: int}
+SiteSettingsAdmin  = SiteSettingsPublic + {base_url}   // base_url 为敏感字段，公开接口不返回
 ```
 
 ## 安装向导（未初始化时）
@@ -40,7 +43,7 @@ UploadResult = {url, size: <字节数>, filename: <原始文件名回显>}
 - 安装完成无需重启进程（进程内切换到已初始化状态即可；实现上允许重启，但接口行为必须一致）
 
 ## 站点公开接口（已安装后可用）
-- `GET /api/site` → `SiteInfo`
+- `GET /api/site` → `SiteInfo`（title/subtitle 与站点设置一致，见「站点设置」）
 - `GET /api/posts?page&per_page&tag=<name>&category=<name>&year=<int>&month=<int>` → 分页 `[PostPublic]`，仅 published，按 published_at DESC；列表不含 content_md
 - excerpt 为空时的回退（2026-10-03 定）：由 content_md 生成**纯文本**摘要（剥离 Markdown 语法：标题#、强调符、代码围栏、表格线、链接保留文字），截断至 ≤200 字符；不得返回含 Markdown 符号的原文
 - `GET /api/posts/:slug` → `PostDetail`；不存在/未发布 → 404 `not_found`
@@ -71,13 +74,16 @@ UploadResult = {url, size: <字节数>, filename: <原始文件名回显>}
   - Content-Type 按扩展名（png/jpg/gif/webp）；响应带 `Cache-Control: public, max-age=31536000, immutable`
   - 防目录穿越（词法清洗 + canonicalize 物理校验，同 themes assets）；文件不存在/路径非法 → 404
 
-RSS 与 sitemap（2026-10-03 新增）：
-- 站点绝对 URL 来源（feed/sitemap 共用）：config.toml `[server] base_url` 非空则用它（去尾 `/`）；
-  为空则从请求头推导：scheme 取 `X-Forwarded-Proto`（缺省 `http`，仅接受 http/https），
-  host 取 `X-Forwarded-Host` → `Host`（反代场景）
+RSS 与 sitemap（2026-10-03 新增；base_url 来源 2026-10-03 更新为站点设置优先）：
+- 站点绝对 URL 来源（feed/sitemap 共用，按优先级）：
+  1. 站点设置 `base_url` 非空则用它（去尾 `/`，见「站点设置」）
+  2. 否则 config.toml `[server] base_url` 非空则用它（去尾 `/`）
+  3. 否则从请求头推导：scheme 取 `X-Forwarded-Proto`（缺省 `http`，仅接受 http/https），
+     host 取 `X-Forwarded-Host` → `Host`（反代场景）
+- feed channel 的 title/description 读站点设置（title=站点名称；description=副标题，为空回退标题）
 - `GET /api/feed.xml` → RSS 2.0，Content-Type `application/rss+xml; charset=utf-8`
   - 最新 20 篇 published 文章，按 published_at DESC
-  - channel 含 title（站点标题）、link（站点绝对 URL）、description（副标题，为空回退标题）
+  - channel 含 title、link（站点绝对 URL）、description（来源见上）
   - item 含 title、link（`{base}/posts/{slug}`，与前端路由一致）、guid（isPermaLink=true，同 link）、
     pubDate（RFC 822）、description（excerpt，为空时按「excerpt 回退」条款从正文推导）
   - 所有文本 XML 转义（`& < > " '`）
@@ -85,6 +91,33 @@ RSS 与 sitemap（2026-10-03 新增）：
   Content-Type `application/xml; charset=utf-8`
   - 含：首页 `{base}/`、全部 published 文章详情页（lastmod=updated_at，W3C datetime 即 RFC3339）、
     标签索引 `{base}/tags`、分类索引 `{base}/categories`、归档 `{base}/archive`
+
+站点设置（2026-10-03 新增）：
+- 存储：`settings` 表（key-value：`name` 主键 / `value` / `updated_at`，SQLite/MySQL 共用 SQL，Any 驱动）；
+  时间戳沿用全库 RFC3339 UTC 文本惯例
+- 字段（键名）：`site_title`（站点名称）、`site_subtitle`（副标题/口号）、`site_description`
+  （meta 描述）、`icp_number`（ICP 备案号，选填）、`footer_text`（页脚自定义文字，选填）、
+  `per_page`（每页文章数，默认 10）、`base_url`（RSS/sitemap 绝对 URL 覆盖，选填）
+- 默认值：**安装时写入**——title/subtitle 取安装请求 `site.title`/`site.subtitle`，
+  base_url 初始值取 config.toml `[server] base_url`（可为空），per_page=10，其余为空串；
+  升级安装（表存在但无行）时按键回退同款默认值（title/subtitle 回退 config.toml `[site]`）
+- 生效方式：进程内实时（读取路径每次请求查库），**修改后无需重启**
+- `GET /api/site/settings` → `SiteSettingsPublic`（公开、无需鉴权；供前台头部/页脚/分页默认值渲染）
+  - **不含 base_url 等敏感字段**；不进未安装门禁白名单，未安装 → 503 `not_installed`
+- `GET /api/admin/site/settings`（Bearer）→ `SiteSettingsAdmin`（全部字段，含 base_url）
+- `PUT /api/admin/site/settings`（Bearer）→ 200 `SiteSettingsAdmin`（更新后的完整设置）
+  - body: `{title, subtitle?, description?, icp_number?, footer_text?, per_page, base_url?}`
+    （可选字段缺失/null 视为空串；全量更新语义）
+  - 校验（失败 → 422 `validation_error`）：
+    - title trim 后非空，≤255 字符；subtitle ≤255；description ≤1000；icp_number ≤100；
+      footer_text ≤1000；base_url ≤500
+    - per_page 整数 1~100
+    - base_url 非空时必须是合法绝对 URL 且 scheme 为 http/https
+  - 未登录/token 无效 → 401 `unauthorized`
+- 联动读取（改为读站点设置而非硬编码/config.toml）：
+  - `GET /api/site` 的 title/subtitle
+  - `GET /api/posts`、`GET /api/search` 未传 per_page 时的默认值
+  - `GET /api/feed.xml` 的 channel title/description、feed 与 sitemap 的绝对 URL（优先级见「RSS 与 sitemap」）
 
 ## 鉴权
 - `POST /api/auth/login` body `{username, password}` → 200 `AuthResult`；错误 → 401 `invalid_credentials`

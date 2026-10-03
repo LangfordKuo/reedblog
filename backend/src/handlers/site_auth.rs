@@ -11,12 +11,20 @@ use crate::error::{ApiError, ApiResult, ValidJson};
 use crate::models::{AuthResult, LoginRequest, SiteInfo};
 use crate::state::{require_pool, AppState};
 
-/// GET /api/site → SiteInfo
+/// GET /api/site → SiteInfo（title/subtitle 与站点设置一致，契约「站点设置-联动读取」条款；
+/// 库不可读时回退 config.toml [site] 的 Runtime 缓存值）
 pub async fn site_info(State(state): State<AppState>) -> Json<SiteInfo> {
     let rt = state.runtime().await;
+    let (title, subtitle) = match &rt.pool {
+        Some(pool) if rt.installed => match crate::settings::load(pool, &state).await {
+            Ok(s) => (s.title, s.subtitle),
+            Err(_) => (rt.site_title.clone(), rt.site_subtitle.clone()),
+        },
+        _ => (rt.site_title.clone(), rt.site_subtitle.clone()),
+    };
     Json(SiteInfo {
-        title: rt.site_title,
-        subtitle: rt.site_subtitle,
+        title,
+        subtitle,
         installed: rt.installed,
     })
 }
