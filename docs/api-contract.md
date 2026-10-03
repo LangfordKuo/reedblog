@@ -19,7 +19,10 @@ PostPublic   = {id, title, slug, excerpt, category: {id, name}|null,
                 view_count: int, likes: int}
                // 2026-10-04 浏览量与点赞新增：view_count=浏览量（计数与去重策略见
                // 「浏览量与点赞」）；likes=点赞总数（post_likes 子查询计数）
-PostDetail   = PostPublic + {content_md}
+PostDetail   = PostPublic + {content_md,
+                prev_post: {title, slug}|null, next_post: {title, slug}|null}
+               // 2026-10-04 上一篇/下一篇新增：prev=发布时间更早、next=更晚的相邻文章，
+               // 纯时间序、不受置顶影响；仅详情接口有这两个字段（见「文章上一篇/下一篇」）
 SearchResult = PostPublic + {snippet}   // snippet 为纯文本上下文片段，见「全文搜索」
 PostAdmin    = {id, title, slug, content_md, excerpt,
                 status: "draft"|"published"|"scheduled",  // scheduled 为 2026-10-03 定时发布新增
@@ -99,6 +102,9 @@ post_count、站点统计 SiteStats.post_count、归档计数）同口径。详�
     **不受置顶影响**）；其他值 → 422 `validation_error`
 - excerpt 为空时的回退（2026-10-03 定）：由 content_md 生成**纯文本**摘要（剥离 Markdown 语法：标题#、强调符、代码围栏、表格线、链接保留文字），截断至 ≤200 字符；不得返回含 Markdown 符号的原文
 - `GET /api/posts/:slug` → `PostDetail`；不存在/未公开可见（草稿、未到点的 scheduled）→ 404 `not_found`
+  - **上一篇/下一篇**（2026-10-04 新增，见「文章上一篇/下一篇」）：`prev_post`/`next_post` 为
+    `{title, slug}|null`；prev = 发布时间更早的相邻文章、next = 更晚，纯时间序、**不受置顶影响**；
+    草稿与未到点的 scheduled 不作为相邻项出现
   - **浏览量计数点**：每次公开命中 view_count + 1（去重/排除规则见「浏览量与点赞」）；
     计数成功时响应中的 view_count 已含本次
 - `GET /api/posts/:slug/like?liker_key=` → 200 `{likes: int, liked: bool}`（当前访客是否已赞，
@@ -455,6 +461,26 @@ docs/extensibility-contract.md「主题组件」与 docs/theme-development.md「
 - 删除文章连带删除其 post_likes 行（`DELETE /api/admin/posts/:id` 清理范围扩展）
 - 前端交互约定：详情页点赞按钮（心形图标 + 数字），点击乐观更新 + scale 弹跳动画，
   已赞态高亮，再点取消；localStorage 记住匿名 id
+
+## 文章上一篇/下一篇（2026-10-04 新增）
+
+- 形状：`PostDetail` 新增 `prev_post`/`next_post`，各为 `{title, slug} | null`（只带标题与
+  slug，不含正文）。**仅详情接口有这两个字段**：`PostPublic`、列表、搜索、RSS/sitemap 的
+  形状与行为完全不变
+- 语义：**prev = 发布时间更早的那篇，next = 发布时间更晚的那篇**。相邻关系按**纯发布时间**
+  排序 `published_at DESC, id DESC` 取当前篇紧邻的前/后一条（id 做同秒发布的稳定 tiebreak）；
+  某方向没有相邻文章时为 `null`（最新一篇 next=null、最老一篇 prev=null）
+- **置顶（is_sticky）不影响相邻关系**：相邻排序是纯时间序，不是列表页的 sticky 优先序
+  ——置顶会把某篇文章人为拽到所有位置旁边，破坏「上一篇/下一篇」的时间语义
+- 可见性谓词与所有公开查询完全一致（见「公开可见性」）：
+  `(status='published' OR (status='scheduled' AND published_at <= :now))`——草稿、未到点的
+  scheduled 都不作为相邻项出现；已到点的 scheduled 正常参与
+- 实现约束：相邻查询在详情 handler 内完成（**不新增独立端点**，避免前端额外往返）；
+  只查 `title`/`slug` 两列；SQLite/MySQL 共用一份 SQL——`(published_at, id)` 用显式
+  `OR` 展开比较，不用行值比较/窗口函数等方言或版本敏感特性
+- 前端渲染约定：详情页正文底部、评论区之前显示「上一篇 / 下一篇」双栏导航
+  （左 = 更早、右 = 更晚，显示标题、可点击跳转）；单侧为 `null` 时该侧留空
+  （不出现死链接），窄屏（<sm）改为上下堆叠；配色走现有主题 token 与暗色模式
 
 ## 鉴权
 - `POST /api/auth/login` body `{username, password}` → 200 `AuthResult`；错误 → 401 `invalid_credentials`

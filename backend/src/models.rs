@@ -35,6 +35,14 @@ pub struct PostPublic {
     pub likes: i64,
 }
 
+/// 上一篇/下一篇导航项（契约「文章上一篇/下一篇」条款，2026-10-04 新增）：
+/// 只带标题与 slug，不含正文；某方向无相邻文章时详情响应中为 null
+#[derive(Debug, Clone, Serialize)]
+pub struct PostNeighbor {
+    pub title: String,
+    pub slug: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PostDetail {
     #[serde(flatten)]
@@ -44,6 +52,10 @@ pub struct PostDetail {
     /// 渲染管线产物：before_render 改写 content_md → Markdown 渲染 → after_render 改写。
     /// 扩展契约新增字段（核心契约 PostDetail 的超集，前端可继续只用 content_md）
     pub content_html: String,
+    /// 发布时间更早的相邻文章（纯时间序，不受置顶影响）；无则 null
+    pub prev_post: Option<PostNeighbor>,
+    /// 发布时间更晚的相邻文章；无则 null
+    pub next_post: Option<PostNeighbor>,
 }
 
 /// 搜索结果单条（契约「全文搜索」条款）：PostPublic 全字段 + snippet。

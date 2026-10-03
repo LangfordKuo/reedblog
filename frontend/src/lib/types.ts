@@ -54,8 +54,18 @@ export interface PostPublic {
   likes: number
 }
 
+/** 上一篇/下一篇导航项（契约「文章上一篇/下一篇」条款）：只带标题与 slug，不含正文 */
+export interface PostNavItem {
+  title: string
+  slug: string
+}
+
 export interface PostDetail extends PostPublic {
   content_md: string
+  /** 发布时间更早的相邻文章（纯时间序，不受置顶影响）；无则 null */
+  prev_post: PostNavItem | null
+  /** 发布时间更晚的相邻文章；无则 null */
+  next_post: PostNavItem | null
 }
 
 /** GET /api/search 单条结果（契约「全文搜索」条款） */

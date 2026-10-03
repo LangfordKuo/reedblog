@@ -5,6 +5,7 @@ import { ArrowLeftIcon, CalendarDaysIcon, EyeIcon, FolderIcon, MessageSquareIcon
 import { CommentSection } from "@/components/comment-section"
 import { LikeButton } from "@/components/like-button"
 import { Markdown } from "@/components/markdown"
+import { PostNav } from "@/components/post-nav"
 import { PostToc } from "@/components/post-toc"
 import { ReadingProgress } from "@/components/reading-progress"
 import { BlockSpinner } from "@/components/spinner"
@@ -155,6 +156,8 @@ export default function PostDetailPage() {
             </footer>
           )}
         </article>
+        {/* 上一篇/下一篇（契约「文章上一篇/下一篇」条款；评论区之前，左=更早、右=更晚） */}
+        <PostNav prev={post.prev_post} next={post.next_post} />
         <Separator className="my-10" />
         <CommentSection slug={post.slug} />
       </div>

@@ -11,8 +11,8 @@ use std::net::SocketAddr;
 use crate::error::{ApiError, ApiResult, ValidJson};
 use crate::models::{
     normalize_paging, ArchiveEntry, Category, CategoryRef, CommentPub, CreateCommentRequest,
-    LikeBody, LikeQuery, LikeResult, Page, PostDetail, PostPublic, PostsQuery, SearchQuery,
-    SearchResult, Tag,
+    LikeBody, LikeQuery, LikeResult, Page, PostDetail, PostNeighbor, PostPublic, PostsQuery,
+    SearchQuery, SearchResult, Tag,
 };
 use crate::pages::row_bool;
 use crate::state::{now_rfc3339, require_pool, AppState};
@@ -262,6 +262,40 @@ pub async fn search_posts(
     }))
 }
 
+/// 详情页单个方向的相邻文章（契约「文章上一篇/下一篇」条款，2026-10-04 新增）：
+/// `later=false` 取发布时间更早的紧邻一条（prev）、`true` 取更晚的（next）。
+/// 排序/比较键为 (published_at, id)（id 做同秒发布的稳定 tiebreak；
+/// **不看 is_sticky**——相邻关系是纯时间语义，与列表页的 sticky 优先序无关）。
+/// 可见性谓词复用 VISIBLE_POST_SQL（草稿、未到点 scheduled 都不作相邻项），
+/// :now 为其绑定参数；`(published_at, id)` 用显式 OR 展开比较，SQLite/MySQL 共用一份 SQL。
+/// 只取 title/slug 两列，不查正文。
+async fn fetch_post_neighbor(
+    pool: &AnyPool,
+    published_at: &str,
+    id: i64,
+    later: bool,
+) -> ApiResult<Option<PostNeighbor>> {
+    // 更晚 → 取比当前键大的最小者（ASC）；更早 → 取比当前键小的最大者（DESC）
+    let (cmp, order) = if later { (">", "ASC") } else { ("<", "DESC") };
+    let sql = format!(
+        "SELECT p.title, p.slug FROM posts p \
+         WHERE {VISIBLE_POST_SQL} \
+         AND (p.published_at {cmp} ? OR (p.published_at = ? AND p.id {cmp} ?)) \
+         ORDER BY p.published_at {order}, p.id {order} LIMIT 1"
+    );
+    let row = sqlx::query(&sql)
+        .bind(now_rfc3339())
+        .bind(published_at)
+        .bind(published_at)
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|r| PostNeighbor {
+        title: r.get::<String, _>("title"),
+        slug: r.get::<String, _>("slug"),
+    }))
+}
+
 /// GET /api/posts/:slug → PostDetail；不存在/未公开可见（草稿、未到点的 scheduled）
 /// → 404 not_found
 ///
@@ -323,10 +357,23 @@ pub async fn get_post(
         .run_post_after_render(&render_title, &raw_html, &post.slug)
         .await;
 
+    // 上一篇/下一篇（契约「文章上一篇/下一篇」条款）：在详情 handler 内查相邻，不新增端点。
+    // published_at 为空（异常数据，正常发布流程不会出现）时时间序失据 → 两侧均为 null
+    let (prev_post, next_post) = if post.published_at.is_empty() {
+        (None, None)
+    } else {
+        (
+            fetch_post_neighbor(&pool, &post.published_at, post.id, false).await?,
+            fetch_post_neighbor(&pool, &post.published_at, post.id, true).await?,
+        )
+    };
+
     Ok(Json(PostDetail {
         post,
         content_md: render_md,
         content_html,
+        prev_post,
+        next_post,
     }))
 }
 
