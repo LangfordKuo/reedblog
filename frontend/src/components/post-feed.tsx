@@ -7,6 +7,7 @@ import { Pagination } from "@/components/pagination"
 import { BlockSpinner } from "@/components/spinner"
 import { Badge } from "@/components/ui/badge"
 import { api, errorMessage } from "@/lib/api"
+import { useThemeSettings } from "@/lib/theme-settings"
 import { formatDate } from "@/lib/utils"
 import type { Page, PostPublic } from "@/lib/types"
 
@@ -18,8 +19,11 @@ interface PostFeedProps {
   heading?: string
 }
 
-/** 文章列表（含分页）+ 侧栏，首页 / 标签 / 分类 / 归档月份页共用 */
+/** 文章列表（含分页）+ 侧栏，首页 / 标签 / 分类 / 归档月份页共用。
+ *  三列布局（topbar-minimal-three-column）下右栏由布局壳统一提供，这里不再渲染自带侧栏。 */
 export function PostFeed({ tag, category, year, month, heading }: PostFeedProps) {
+  const { layout } = useThemeSettings()
+  const threeColumn = layout === "topbar-minimal-three-column"
   const [searchParams, setSearchParams] = useSearchParams()
   const page = Math.max(1, Number(searchParams.get("page")) || 1)
   const [data, setData] = useState<Page<PostPublic> | null>(null)
@@ -67,7 +71,7 @@ export function PostFeed({ tag, category, year, month, heading }: PostFeedProps)
   }
 
   return (
-    <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_288px]">
+    <div className={threeColumn ? undefined : "grid gap-8 lg:grid-cols-[minmax(0,1fr)_288px]"}>
       <div>
         {heading && <h1 className="mb-6 text-2xl font-bold tracking-tight">{heading}</h1>}
         {loading ? (
@@ -95,9 +99,11 @@ export function PostFeed({ tag, category, year, month, heading }: PostFeedProps)
           />
         )}
       </div>
-      <aside className="lg:sticky lg:top-24 lg:self-start">
-        <BlogSidebar />
-      </aside>
+      {!threeColumn && (
+        <aside className="lg:sticky lg:top-24 lg:self-start">
+          <BlogSidebar />
+        </aside>
+      )}
     </div>
   )
 }
@@ -155,7 +161,8 @@ export function PostCard({ post, titleNode, excerptNode }: PostCardProps) {
       <div>
         <Link
           to={`/posts/${encodeURIComponent(post.slug)}`}
-          className="text-sm font-medium underline-offset-4 hover:underline"
+          // 主题设置 accent_color 的内置消费点：变量未设置时 var() 失效按 unset 继承原色
+          className="text-[color:var(--theme-setting-accent-color)] text-sm font-medium underline-offset-4 hover:underline"
         >
           阅读全文 →
         </Link>

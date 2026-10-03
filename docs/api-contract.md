@@ -186,6 +186,25 @@ RSS 与 sitemap（2026-10-03 新增；base_url 来源 2026-10-03 更新为站点
   built_in → 422 `page_builtin`
 - 后台留言列表（`GET /api/admin/comments`）返回 `target_type` 供后台区分来源文章/页面
 
+主题设置（2026-10-03 新增；完整规格见 docs/extensibility-contract.md「主题设置项」）：
+- 每个主题可在 theme.toml 用 `[[settings]]` 数组自描述可配置项
+  （key/label/type/group/default/options；type ∈ text|textarea|color|select|switch|number）；
+  值按主题 slug 存 `theme_settings` 表（theme_slug, key, value, updated_at），
+  切换主题不丢、**删除主题连带删除其设置**
+- `ThemeSetting = {key, label, type, group?, default?, options?: [{value, label}]}`
+- `GET /api/themes/:slug/settings`（公开；未安装门禁白名单，未安装时 values=声明默认值）
+  → 200 `{slug, settings: [ThemeSetting], values: {key: string|number|bool}}`
+  （values 为声明 default 与已存值合并后的生效值，按类型输出）；slug 不存在 → 404
+- `GET /api/admin/themes/active/settings-panel`（Bearer）→ 200 `{slug, name, settings, values}`
+  （仅服务当前激活主题，后台设置面板数据源）
+- `PUT /api/admin/themes/:slug/settings`（Bearer）body `{values: {key: value, ...}}`
+  → 200 合并后的最新 `{slug, settings, values}`；部分更新语义（仅写入出现的 key）
+  - key 未在声明内 → 422 `unknown_setting`；值类型不符/select 越界/color 非 hex/
+    超长（text ≤500、textarea ≤5000 字符）→ 422 `invalid_value`；slug 未安装 → 404
+- 前端应用：生效值写入 `:root` 的 `--theme-setting-<key（_ 换 -）>` CSS 变量与
+  `data-setting-*` 属性；layout 生效值写 `data-layout`；切换主题/保存设置后
+  重新拉取即时生效，无需刷新
+
 ## 鉴权
 - `POST /api/auth/login` body `{username, password}` → 200 `AuthResult`；错误 → 401 `invalid_credentials`
 - `GET /api/auth/me`（Bearer）→ `{"username"}`；无效/过期 → 401 `unauthorized`

@@ -8,12 +8,14 @@
 
 ## 1. 主题是什么
 
-一个 reedblog 主题就是**一个目录 / 一个 zip 包**，由三部分组成：
+一个 reedblog 主题就是**一个目录 / 一个 zip 包**，由四部分组成：
 
 1. **设计令牌**（`theme.toml` 的 `[tokens]` / `[tokens_dark]`）——覆盖前端
    shadcn/Tailwind 体系的 CSS 变量，决定全站配色与圆角；
-2. **自定义 CSS**（`theme.css`，可选）——任意补充样式；
-3. **静态资源**（`assets/`，可选）——字体、图片等，由后端托管。
+2. **设置项声明**（`theme.toml` 的 `[[settings]]`，可选）——主题自描述的可配置项，
+   后台按声明渲染设置面板、按主题独立保存（见 §6）；
+3. **自定义 CSS**（`theme.css`，可选）——任意补充样式；
+4. **静态资源**（`assets/`，可选）——字体、图片等，由后端托管。
 
 关键特性：
 
@@ -78,6 +80,7 @@ background = "222 47% 7%"
 | `description` / `author` | 否 | 无，默认空字符串 | — |
 | `[tokens]` | 否 | `key = "字符串"` 的映射；后端**原样下发**不校验 key；缺省为空表 | — |
 | `[tokens_dark]` | 否 | 同上；缺省时响应中不出现该字段 | — |
+| `[[settings]]` | 否 | 设置项声明数组，字段与校验规则见 §6.1 | 422 `invalid_manifest` |
 
 manifest 中未知 TOML 字段会被忽略（向前兼容）。主题没有 `min_app_version`、
 hooks、inject 之类字段。
@@ -185,7 +188,114 @@ hooks、inject 之类字段。
 后台「主题管理」里点「激活」后，后台页面会立即重新拉取并热切换；前台页面下次
 加载生效。
 
-## 6. theme.css：用法与优先级
+## 6. 主题设置项（theme.toml `[[settings]]`）
+
+每个主题可以**自描述**一组可配置项（仿 Typecho「外观 → 设置」）：后台
+「主题设置」页按声明渲染分组表单，值**按主题 slug 独立持久化**（`theme_settings`
+表），切换主题互不影响；**删除主题时其设置一并删除**（重装后回到声明默认值）。
+系统级规格见 [extensibility-contract.md](./extensibility-contract.md)「主题设置项」。
+
+设置系统是令牌管线之上的**叠加层**：`[tokens]` / `[tokens_dark]` /
+`KNOWN_TOKEN_KEYS` / `.dark` 注入机制完全不变。
+
+### 6.1 声明规格
+
+theme.toml 中用 TOML 数组表 `[[settings]]` 声明（可声明 0~N 项；未声明的主题
+面板显示「该主题无自定义设置项」）：
+
+```toml
+[[settings]]
+key = "layout"                    # 必填：^[a-z0-9][a-z0-9_-]{0,63}$，同一主题内唯一
+label = "页面布局"                 # 可选：面板显示名；缺省用 key
+type = "select"                   # 必填：text | textarea | color | select | switch | number
+group = "布局"                    # 可选：面板分组标题（≤64 字符）；缺省归入「通用」
+default = "topbar-two-column"     # 可选：默认值（类型必须与 type 匹配）
+options = [                       # select 必填且非空；其余类型不允许出现
+  { value = "topbar-two-column", label = "顶栏导航 + 双列" },
+  "topbar-minimal-three-column",  # 也接受纯字符串（label=value），下发时归一化为 {value,label}
+]
+```
+
+| type | 值形态 | 校验（保存时违规 → 422 `invalid_value`） |
+|---|---|---|
+| `text` | 字符串 | ≤500 字符 |
+| `textarea` | 字符串 | ≤5000 字符 |
+| `color` | hex 颜色 | `#RGB` / `#RRGGBB` / `#RRGGBBAA`（大小写不敏感，存储时转小写） |
+| `select` | 字符串 | 必须在 `options` 的 value 集合内 |
+| `switch` | 布尔 | JSON bool 或 `"true"`/`"false"` 字符串 |
+| `number` | 数字 | JSON number 或数字字符串（有限值；整数值规范化存储） |
+
+声明本身违规（key 非法/重复、type 未知、select 缺 options、default 与类型不符、
+非 select 带 options）→ **上传 zip 时 422 `invalid_manifest`**，主题不会被安装。
+
+### 6.2 内置 layout 设置（前端布局骨架）
+
+前端内置消费一个系统级 key：**`layout`**（type=select）。内置 default 主题声明了
+两个选项，任何主题都可声明同 key 的设置复用这两套骨架：
+
+- `topbar-two-column`（默认）：顶栏导航 + 主内容/侧栏双列；
+- `topbar-minimal-three-column`：顶栏仅保留搜索与后台管理入口，正文左中右三列
+  （左：导航/分类，中：文章流，右：侧栏信息）。
+
+未声明 layout 或值不在上述枚举内时，前端回退双列。生效值同时写在 `<html>` 的
+`data-layout` 属性上，theme.css 可用 `html[data-layout="..."]` 选择器做布局级定制。
+实现在 `frontend/src/components/site-layout.tsx`（双骨架分派）。
+
+default 主题还声明了两个示例设置：`wide_layout`（switch，宽幅正文）与
+`accent_color`（color，强调色——内置消费点为文章卡片「阅读全文」链接色）。
+
+### 6.3 API
+
+公开（未安装门禁白名单，未安装时 `values` = 声明默认值，保证安装页有样式）：
+
+| 端点 | 说明 |
+|---|---|
+| `GET /api/themes/:slug/settings` | → `{slug, settings: [ThemeSetting], values}`；磁盘无此主题 → 404；default 缺盘时以内置常量兜底 |
+
+管理（需 Bearer）：
+
+| 端点 | 说明 |
+|---|---|
+| `GET /api/admin/themes/active/settings-panel` | → `{slug, name, settings, values}`（**只服务当前激活主题**，后台面板数据源） |
+| `PUT /api/admin/themes/:slug/settings` | body `{values: {key: value, ...}}` → 200 合并后最新形状；**部分更新**语义（仅写入出现的 key）；未声明 key → 422 `unknown_setting`；slug 未安装 → 404 |
+
+`values` 是**生效值**：声明 `default` 与已存值合并（已存值优先），按类型输出
+JSON（switch → bool、number → number、其余 → string）；既无 default 也未保存过
+的 key 不出现在 `values` 中。
+
+后台入口：侧边栏「主题设置」（`/admin/themes/settings`）；主题列表每行的「设置」
+按钮仅激活主题可进（非激活提示先激活）。
+
+### 6.4 CSS 变量与 data 属性约定（theme.css 消费方式）
+
+前端拉到生效值后（启动时随 `applyActiveTheme()`、后台保存/切换主题后即时）：
+
+1. 每个值写入 `:root` 内联 CSS 变量 **`--theme-setting-<key>`**（key 中 `_` 换成
+   `-`，如 `accent_color` → `--theme-setting-accent-color`）；换主题时先清空上一
+   主题的全部设置变量再写入，无残留；
+2. 同时写 `<html>` 的 **`data-setting-<key-dashes>="字符串化值"`** 属性
+   （switch 为 `"true"`/`"false"`）；
+3. `layout` 生效值额外写 `<html>` 的 **`data-layout`** 属性。
+
+theme.css 消费示例（见 `examples/themes/midnight/theme.css`）：
+
+```css
+/* 变量未设置时回退默认值 */
+::selection {
+  background: color-mix(in srgb, var(--theme-setting-accent-color, hsl(199 89% 55%)) 35%, transparent);
+}
+
+/* switch 设置用 data 属性选择器 */
+html[data-setting-glow-accent="false"] ::selection {
+  background: hsl(217 33% 25%);
+}
+```
+
+注意：`--theme-setting-*` 写在 `documentElement` **内联样式**上，theme.css 里
+直接 `var()` 引用即可；若要在 `.dark` 下给不同值，选择器优先级压不过内联声明，
+需用 `html.dark[data-...] { ... }` 包一层自定义属性中转，或接受同值。
+
+## 7. theme.css：用法与优先级
 
 存在 `theme.css` 时，后端通过 `GET /api/themes/:slug/theme.css` 以
 `text/css; charset=utf-8` 托管（文件不存在 → 404，`ThemeInfo.has_css` 为
@@ -200,13 +310,13 @@ hooks、inject 之类字段。
      因为令牌写在 `documentElement` 的内联样式上，普通规则压不过）；
   2. 覆盖内置样式中**写死的颜色**且不想拼选择器优先级——典型例子是 index.css 给
      文章代码块写死的浅色背景 `.prose :where(pre):not(:where([class~="not-prose"] *))`
-     （暗色主题必须覆盖它，见 §9 示例）；
+     （暗色主题必须覆盖它，见 §10 示例）；
   3. `.dark` 类下的暗色令牌本身就以 `!important` 注入，若要再覆盖需同样使用
      `!important` 且保证选择器优先级不低于 `.dark`。
 - 可以写任意 CSS；前端是 Tailwind CSS 4 + shadcn 风格组件，类名与变量用浏览器
   devtools 即可确认。
 
-## 7. assets/：字体与图片
+## 8. assets/：字体与图片
 
 `assets/` 下的文件经 `GET /api/themes/:slug/assets/<相对路径>` 托管（该端点在
 未安装门禁白名单内，GET 永远可达；文件不存在 → 404）。
@@ -226,7 +336,7 @@ hooks、inject 之类字段。
 - **防目录穿越**：路径做词法清洗（拒绝 `..`、绝对路径、盘符、反斜杠归一化），
   并二次 `canonicalize` 校验目标必须仍在该主题的 `assets/` 内；越界一律 404。
 
-## 8. preview.png、打包与后台管理
+## 9. preview.png、打包与后台管理
 
 ### preview.png
 
@@ -269,7 +379,9 @@ Compress-Archive -Path midnight -DestinationPath midnight.zip
 | `GET /api/admin/themes` | `{"items":[ThemeInfo], "total":int}`（按 slug 字典序） |
 | `POST /api/admin/themes`（multipart，字段 `file` = zip） | 201 `ThemeInfo` |
 | `POST /api/admin/themes/:slug/activate` | 200 `ThemeInfo`（`active:true`） |
-| `DELETE /api/admin/themes/:slug` | 204 |
+| `DELETE /api/admin/themes/:slug` | 204（连带删除该主题的 theme_settings 行，见 §6） |
+| `GET /api/admin/themes/active/settings-panel` | 200 激活主题的 `{slug, name, settings, values}`（见 §6.3） |
+| `PUT /api/admin/themes/:slug/settings` | 200 合并后的 `{slug, settings, values}`（见 §6.3） |
 
 公开端点（无需鉴权）：
 
@@ -279,6 +391,7 @@ Compress-Archive -Path midnight -DestinationPath midnight.zip
 | `GET /api/themes/:slug/theme.css` | `text/css`；不存在 404（白名单） |
 | `GET /api/themes/:slug/preview.png` | `image/png`；不存在 404 |
 | `GET /api/themes/:slug/assets/*path` | 静态资源；不存在/越界 404（白名单） |
+| `GET /api/themes/:slug/settings` | 设置声明 + 生效值（白名单：未安装时 values=声明默认值；见 §6.3） |
 
 `ThemeInfo` 形状：
 
@@ -308,10 +421,12 @@ Compress-Archive -Path midnight -DestinationPath midnight.zip
 - `GET /api/themes/active` 在磁盘没有任何可用主题时用后端内置的同一份常量兜底，
   前端永远拿得到基础样式。
 
-## 9. 完整示例：暗色主题 midnight
+## 10. 完整示例：暗色主题 midnight
 
 仓库 [`examples/themes/midnight/`](../examples/themes/midnight/) 是一套可直接打包
-安装的完整暗色主题，`[tokens]` 与 `[tokens_dark]` 均覆盖全部 32 个令牌 key。
+安装的完整暗色主题，`[tokens]` 与 `[tokens_dark]` 均覆盖全部 32 个令牌 key，
+并声明了 3 个 `[[settings]]` 设置项（强调色 / 发光选中开关 / 页脚附加文字），
+theme.css 演示了 `--theme-setting-*` 变量与 `data-setting-*` 属性的消费方式（见 §6.4）。
 
 ### theme.toml（节选，完整文件见示例目录）
 
@@ -389,24 +504,27 @@ background = "222 47% 7%"
 
 ### 安装
 
-打包（见 §8 命令）→ 后台「主题管理」上传 → 激活 → 整站（含后台）立即变为深蓝
+打包（见 §9 命令）→ 后台「主题管理」上传 → 激活 → 整站（含后台）立即变为深蓝
 暗色调；文章代码块、选中色、滚动条随 theme.css 生效。
 
-## 10. 错误码对照表
+## 11. 错误码对照表
 
 | HTTP | code | 触发场景 |
 |---|---|---|
 | 422 | `invalid_package` | 非 multipart / 缺 `file` 字段；zip 解析失败；zip 为空；条目数超 4096；解压后超 64 MB；路径含 `..`/盘符/绝对路径；根层不是单个目录；缺 `theme.toml` |
-| 422 | `invalid_manifest` | `theme.toml` 解析失败；`name` 为空；`slug` 非法或与目录名不一致；`version` 非法 semver |
+| 422 | `invalid_manifest` | `theme.toml` 解析失败；`name` 为空；`slug` 非法或与目录名不一致；`version` 非法 semver；`[[settings]]` 声明违规（key 非法/重复、type 未知、select 缺 options、default 与类型不符等，见 §6.1） |
+| 422 | `unknown_setting` | `PUT /api/admin/themes/:slug/settings` 提交了主题未声明的设置 key |
+| 422 | `invalid_value` | 保存设置时值与类型不符：select 越界 / color 非 hex / switch 非布尔 / number 非数字 / text·textarea 超长 |
+| 422 | `validation_error` | 保存设置的请求体缺少 `values` 字段或 `values` 非 JSON 对象 |
 | 409 | `builtin_protected` | 上传覆盖 `default`；删除 `default` |
 | 409 | `theme_exists` | 上传的 slug 与已安装主题冲突 |
 | 409 | `theme_active` | 删除当前激活主题（需先切换） |
-| 404 | `not_found` | 主题 slug 不存在（激活/删除），或静态文件不存在 |
+| 404 | `not_found` | 主题 slug 不存在（激活/删除/设置读写），或静态文件不存在 |
 | 401 | `unauthorized` | 管理端点缺少或携带无效/过期 Bearer token |
 | 503 | `not_installed` | 站点未完成安装向导（管理端点均被门禁拦截） |
 | 500 | `internal_error` | config.toml 不可读（激活时）、磁盘 IO 错误 |
 
-## 11. 调试技巧
+## 12. 调试技巧
 
 1. **主题列表里看不到刚装的主题**：目录名是否合法 slug 且与 `theme.toml` 的
    `slug` 一致？`theme.toml` 是否有 TOML 语法错误？——两者都会被**静默跳过**，
@@ -426,4 +544,12 @@ background = "222 47% 7%"
    扫描磁盘）→ 后台激活 → 改 `theme.toml`/`theme.css` 后刷新页面即可看到效果；
    发布前再打 zip。
 8. **代码块仍是浅色**：内置 index.css 对 `.prose pre` 写死了浅色背景，需在
-   theme.css 中显式覆盖（见 §9）。
+   theme.css 中显式覆盖（见 §10）。
+9. **设置项没出现在面板/上传被拒**：上传报 422 `invalid_manifest` 时看响应
+   message（会指明哪个 key 的什么违规）；已装主题的 `[[settings]]` 改动后刷新
+   后台设置页即可（声明每次请求从磁盘读取），但**保存值仍按 key 隔离在
+   theme_settings 表**，删除声明中不存在的 key 的旧值不会自动清理（不再生效，
+   重装主题时随删除操作一并清掉）。
+10. **设置值没生效**：devtools → `<html>` 内联样式应有 `--theme-setting-<key>`
+    变量、属性面板应有 `data-setting-*` 与 `data-layout`；没有则检查设置页是否
+    保存成功、主题是否激活（公开端点只返回生效值，panel 只服务激活主题）。

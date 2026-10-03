@@ -12,6 +12,7 @@ import {
   PaletteIcon,
   PuzzleIcon,
   SettingsIcon,
+  SlidersHorizontalIcon,
   TagsIcon,
   XIcon,
 } from "lucide-react"
@@ -30,7 +31,9 @@ const navItems = [
   { to: "/admin/tags", label: "标签管理", icon: TagsIcon, end: false },
   { to: "/admin/comments", label: "评论管理", icon: MessageSquareIcon, end: false },
   { to: "/admin/plugins", label: "插件", icon: PuzzleIcon, end: false },
-  { to: "/admin/themes", label: "主题", icon: PaletteIcon, end: false },
+  // 主题与其设置面板为父子路径，均用精确匹配避免双重高亮
+  { to: "/admin/themes", label: "主题", icon: PaletteIcon, end: true },
+  { to: "/admin/themes/settings", label: "主题设置", icon: SlidersHorizontalIcon, end: true },
   { to: "/admin/settings", label: "站点管理", icon: SettingsIcon, end: false },
 ]
 

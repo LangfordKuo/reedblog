@@ -29,10 +29,20 @@ body {
   color: hsl(210 40% 92%) !important;
 }
 
-/* 选中文本配色 */
+/* 选中文本配色：消费主题设置 accent_color（--theme-setting-* 变量由前端注入，
+   未设置时 var() 回退默认天蓝；详见 docs/theme-development.md「主题设置项」） */
 ::selection {
-  background: hsl(199 89% 55% / 35%);
+  background: color-mix(
+    in srgb,
+    var(--theme-setting-accent-color, hsl(199 89% 55%)) 35%,
+    transparent
+  );
   color: hsl(210 40% 96%);
+}
+
+/* 消费 switch 设置 glow_accent（data-setting-* 属性写在 <html> 上）：关闭时用朴素选中色 */
+html[data-setting-glow-accent="false"] ::selection {
+  background: hsl(217 33% 25%);
 }
 
 /* 滚动条美化（WebKit 内核） */

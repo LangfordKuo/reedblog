@@ -1,10 +1,17 @@
 import type { SiteSettings } from "@/lib/types"
+import { cn } from "@/lib/utils"
 
-/** 站点页脚：版权行 + 自定义文字（有值时）+ ICP 备案号（有值时，链到工信部备案系统） */
-export function SiteFooter({ site }: { site: SiteSettings | null }) {
+/** 站点页脚：版权行 + 自定义文字（有值时）+ ICP 备案号（有值时，链到工信部备案系统）
+ *  wide：wide_layout 主题设置开启（或三列布局）时放宽容器，与主区宽度一致 */
+export function SiteFooter({ site, wide = false }: { site: SiteSettings | null; wide?: boolean }) {
   return (
     <footer className="border-t py-8">
-      <div className="mx-auto flex w-full max-w-5xl flex-col items-center gap-1.5 px-4 text-center text-sm text-muted-foreground">
+      <div
+        className={cn(
+          "mx-auto flex w-full flex-col items-center gap-1.5 px-4 text-center text-sm text-muted-foreground",
+          wide ? "max-w-7xl" : "max-w-5xl",
+        )}
+      >
         <div>
           © {new Date().getFullYear()} {site?.title || "reedblog"} · Powered by{" "}
           <span className="font-medium">reedblog</span>

@@ -10,6 +10,7 @@ import { BlockSpinner } from "@/components/spinner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { api, errorMessage } from "@/lib/api"
+import { useThemeSettings } from "@/lib/theme-settings"
 import type { Page, SearchResult } from "@/lib/types"
 
 /** 与后端 split_search_terms 一致：空白切分、上限 8 个词条（多余忽略） */
@@ -22,8 +23,11 @@ function splitTerms(q: string): string[] {
     .slice(0, MAX_TERMS)
 }
 
-/** /search?q=…：全文搜索结果页（URL 携带查询词，可分享/刷新） */
+/** /search?q=…：全文搜索结果页（URL 携带查询词，可分享/刷新）。
+ *  三列布局下右栏由布局壳统一提供，不再渲染自带侧栏（与 PostFeed 同款处理）。 */
 export default function SearchPage() {
+  const { layout } = useThemeSettings()
+  const threeColumn = layout === "topbar-minimal-three-column"
   const [searchParams, setSearchParams] = useSearchParams()
   const q = (searchParams.get("q") ?? "").trim()
   const page = Math.max(1, Number(searchParams.get("page")) || 1)
@@ -93,7 +97,7 @@ export default function SearchPage() {
   const terms = splitTerms(q)
 
   return (
-    <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_288px]">
+    <div className={threeColumn ? undefined : "grid gap-8 lg:grid-cols-[minmax(0,1fr)_288px]"}>
       <div>
         <form onSubmit={submit} className="mb-6 flex gap-2">
           <Input
@@ -153,9 +157,11 @@ export default function SearchPage() {
           </>
         ) : null}
       </div>
-      <aside className="lg:sticky lg:top-24 lg:self-start">
-        <BlogSidebar />
-      </aside>
+      {!threeColumn && (
+        <aside className="lg:sticky lg:top-24 lg:self-start">
+          <BlogSidebar />
+        </aside>
+      )}
     </div>
   )
 }

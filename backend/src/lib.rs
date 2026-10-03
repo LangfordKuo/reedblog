@@ -12,6 +12,7 @@ pub mod plugins;
 pub mod seed;
 pub mod settings;
 pub mod state;
+pub mod theme_settings;
 pub mod themes;
 
 use axum::extract::{DefaultBodyLimit, Request, State};
@@ -174,6 +175,8 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/themes/{slug}/theme.css", get(frontend::theme_css))
         .route("/themes/{slug}/preview.png", get(frontend::theme_preview))
         .route("/themes/{slug}/assets/{*path}", get(frontend::theme_asset))
+        // 主题设置生效值（公开，未安装门禁白名单；未安装时 values=声明默认值）
+        .route("/themes/{slug}/settings", get(frontend::theme_settings))
         // 管理：插件
         .route(
             "/admin/plugins",
@@ -207,6 +210,15 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route(
             "/admin/themes/{slug}/activate",
             post(admin_themes::admin_activate_theme),
+        )
+        // 管理：主题设置（panel 只服务激活主题；PUT 按 slug 保存）
+        .route(
+            "/admin/themes/active/settings-panel",
+            get(admin_themes::admin_active_settings_panel),
+        )
+        .route(
+            "/admin/themes/{slug}/settings",
+            axum::routing::put(admin_themes::admin_update_theme_settings),
         )
         // 未匹配路径兜底（layer 不覆盖默认 fallback，需显式声明）
         .fallback(api_fallback)

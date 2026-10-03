@@ -28,6 +28,9 @@ import type {
   SiteSettingsSaveBody,
   Tag,
   ThemeInfo,
+  ThemeSettingValue,
+  ThemeSettingsPanel,
+  ThemeSettingsResponse,
   UploadResult,
 } from "./types"
 
@@ -180,6 +183,9 @@ export const api = {
 
   // 扩展系统公开接口（未安装门禁白名单内，无需鉴权）
   themeActive: () => request<ActiveTheme>("GET", "/themes/active"),
+  // 主题设置生效值（声明 default 与已存值合并；未安装时 default 也可读）
+  themeSettings: (slug: string) =>
+    request<ThemeSettingsResponse>("GET", `/themes/${encodeURIComponent(slug)}/settings`),
   frontendInjections: () => request<FrontendInjections>("GET", "/frontend/injections"),
 
   // 鉴权
@@ -261,5 +267,15 @@ export const api = {
       request<ThemeInfo>("POST", `/admin/themes/${encodeURIComponent(slug)}/activate`),
     deleteTheme: (slug: string) =>
       request<void>("DELETE", `/admin/themes/${encodeURIComponent(slug)}`),
+
+    // 主题设置（panel 只服务当前激活主题；PUT 部分更新语义，按 slug 隔离存储）
+    themeSettingsPanel: () =>
+      request<ThemeSettingsPanel>("GET", "/admin/themes/active/settings-panel"),
+    updateThemeSettings: (slug: string, values: Record<string, ThemeSettingValue>) =>
+      request<ThemeSettingsResponse>(
+        "PUT",
+        `/admin/themes/${encodeURIComponent(slug)}/settings`,
+        { values },
+      ),
   },
 }

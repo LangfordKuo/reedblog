@@ -10,7 +10,8 @@ use crate::state::AppState;
 
 /// 免安装白名单（精确路径匹配；/api/install 仅在 POST 时放行）。
 /// 扩展契约第三部分新增（仅 GET）：themes/active、themes/:slug/theme.css、
-/// themes/:slug/assets/*、frontend/injections —— 未安装时前端也有样式与（空）注入。
+/// themes/:slug/assets/*、themes/:slug/settings、frontend/injections ——
+/// 未安装时前端也有样式、（空）注入与 default 主题设置默认值（保证安装页有样式）。
 fn is_exempt(path: &str, method: &axum::http::Method) -> bool {
     if path == "/api/health"
         || path == "/api/install/status"
@@ -24,7 +25,9 @@ fn is_exempt(path: &str, method: &axum::http::Method) -> bool {
     path == "/api/themes/active"
         || path == "/api/frontend/injections"
         || (path.starts_with("/api/themes/")
-            && (path.ends_with("/theme.css") || path.contains("/assets/")))
+            && (path.ends_with("/theme.css")
+                || path.ends_with("/settings")
+                || path.contains("/assets/")))
 }
 
 pub async fn not_installed_gate(

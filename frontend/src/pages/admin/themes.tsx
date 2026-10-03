@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
-import { CheckIcon, ImageIcon, Loader2Icon, Trash2Icon, UploadIcon } from "lucide-react"
+import { useNavigate } from "react-router-dom"
+import { CheckIcon, ImageIcon, Loader2Icon, Settings2Icon, Trash2Icon, UploadIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { ConfirmDialog } from "@/components/confirm-dialog"
@@ -41,6 +42,7 @@ function deleteDisabledHint(t: ThemeInfo): string | null {
 }
 
 export default function AdminThemesPage() {
+  const navigate = useNavigate()
   const [items, setItems] = useState<ThemeInfo[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [file, setFile] = useState<File | null>(null)
@@ -203,6 +205,19 @@ export default function AdminThemesPage() {
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center justify-end gap-1">
+                          {/* 设置入口只服务激活主题（管理 panel 端点即激活主题） */}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            title={t.active ? "主题设置" : "请先激活该主题，再进入其设置面板"}
+                            onClick={() => {
+                              if (t.active) navigate("/admin/themes/settings")
+                              else toast.info(`请先激活主题「${t.name}」，再配置其设置项`)
+                            }}
+                          >
+                            <Settings2Icon />
+                            设置
+                          </Button>
                           <Button
                             variant={t.active ? "ghost" : "outline"}
                             size="sm"

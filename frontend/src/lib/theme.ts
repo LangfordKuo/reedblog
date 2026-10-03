@@ -1,4 +1,5 @@
 import { api } from "./api"
+import { loadThemeSettings } from "./theme-settings"
 import type { ThemeTokens } from "./types"
 
 // 已知令牌 key 集合（下划线形式，对应 index.css 的 shadcn 变量体系）。
@@ -110,6 +111,10 @@ function applyThemeCss(cssUrl: string | null | undefined): void {
  * 拉取激活主题并应用（公开站点与后台共用，启动时调用；后台切换主题后可再次调用热切换）。
  * GET /api/themes/active 在未安装门禁白名单内，未安装时返回 default 主题，安装页同样有样式。
  * 接口不可用（后端未就绪/网络错误）时静默跳过，保持 index.css 内置默认样式。
+ *
+ * 令牌之后叠加应用主题设置（契约「主题设置项-前端应用约定」）：
+ * 生效值写入 --theme-setting-* CSS 变量与 data-setting-* / data-layout 属性，
+ * 并更新 theme-settings store 供布局组件订阅；设置端点失败不影响令牌管线。
  */
 export async function applyActiveTheme(): Promise<string | null> {
   try {
@@ -117,6 +122,7 @@ export async function applyActiveTheme(): Promise<string | null> {
     applyTokens(theme.tokens)
     applyDarkTokens(theme.tokens_dark)
     applyThemeCss(theme.css_url)
+    await loadThemeSettings(theme.slug)
     return theme.slug
   } catch {
     return null

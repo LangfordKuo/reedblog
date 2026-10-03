@@ -285,6 +285,42 @@ export interface ActiveTheme {
   preview_url?: string | null
 }
 
+// —— 主题设置（扩展契约「主题设置项」条款，2026-10-03 新增）——
+
+/** theme.toml [[settings]] 的 type 枚举 */
+export type ThemeSettingType = "text" | "textarea" | "color" | "select" | "switch" | "number"
+
+/** select 选项（后端已把字符串写法归一化为 {value, label}） */
+export interface ThemeSettingOption {
+  value: string
+  label: string
+}
+
+/** 单项设置声明（theme.toml [[settings]]，后端归一化下发） */
+export interface ThemeSettingDecl {
+  key: string
+  label: string
+  type: ThemeSettingType
+  group?: string | null
+  default?: string | number | boolean | null
+  options?: ThemeSettingOption[] | null
+}
+
+/** 生效值按类型输出：switch → bool、number → number、其余 → string */
+export type ThemeSettingValue = string | number | boolean
+
+/** GET /api/themes/:slug/settings 响应（公开生效值，前台渲染用） */
+export interface ThemeSettingsResponse {
+  slug: string
+  settings: ThemeSettingDecl[]
+  values: Record<string, ThemeSettingValue>
+}
+
+/** GET /api/admin/themes/active/settings-panel 响应（多一个主题名） */
+export interface ThemeSettingsPanel extends ThemeSettingsResponse {
+  name: string
+}
+
 export interface InjectionFragment {
   plugin: string
   html: string

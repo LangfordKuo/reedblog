@@ -1,17 +1,22 @@
 //! 面向前端的公开端点（扩展契约：前端轻注入 + 主题应用机制）：
 //! GET /api/frontend/injections、GET /api/themes/active、
-//! GET /api/themes/:slug/theme.css、/:slug/preview.png、/:slug/assets/*path
-//! 全部在未安装门禁白名单内（injections 未安装时返回空；active 兜底 default 令牌）。
+//! GET /api/themes/:slug/theme.css、/:slug/preview.png、/:slug/assets/*path、
+//! GET /api/themes/:slug/settings
+//! 全部在未安装门禁白名单内（injections 未安装时返回空；active 兜底 default 令牌；
+//! settings 未安装时 values=声明默认值，保证安装页有样式）。
 
 use axum::extract::{Path, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use crate::error::{ApiError, ApiResult};
 use crate::packages;
 use crate::state::AppState;
+use crate::theme_settings;
 use crate::themes;
 
 /// GET /api/frontend/injections → {"head":[{plugin,html}], "body_end":[...]}
@@ -29,6 +34,35 @@ pub async fn frontend_injections(State(state): State<AppState>) -> Json<Value> {
 pub async fn themes_active(State(state): State<AppState>) -> Json<Value> {
     let active = state.active_theme_slug();
     Json(themes::active_theme_response(state.themes_dir(), &active))
+}
+
+/// GET /api/themes/:slug/settings → {slug, settings, values}（契约「主题设置 API」）
+/// settings 为 theme.toml [[settings]] 归一化声明；values 为声明 default 与已存值
+/// 合并后的生效值（按类型输出）。未安装（DB 不可用）时 values=声明默认值；
+/// default 主题磁盘缺失时以内置常量兜底；其余磁盘不存在的 slug → 404。
+pub async fn theme_settings(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+) -> ApiResult<Json<Value>> {
+    if !packages::valid_slug(&slug) {
+        return Err(ApiError::not_found());
+    }
+    let Some(m) = themes::load_manifest_or_builtin(state.themes_dir(), &slug) else {
+        return Err(ApiError::not_found());
+    };
+    let decls = m.normalized_settings();
+    // 已安装则并入 DB 存储值；未安装/池不可用按空存储处理（白名单端点，安装页可用）
+    let stored = match crate::state::require_pool(&state).await {
+        Ok((pool, _db_type)) => theme_settings::load_stored(&pool, &slug)
+            .await
+            .unwrap_or_default(),
+        Err(_) => BTreeMap::new(),
+    };
+    Ok(Json(json!({
+        "slug": slug,
+        "settings": decls,
+        "values": theme_settings::merged_values(&decls, &stored),
+    })))
 }
 
 /// GET /api/themes/:slug/theme.css → text/css（不存在 404）

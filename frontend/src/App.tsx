@@ -16,6 +16,7 @@ import AdminPostEditPage from "@/pages/admin/post-edit"
 import AdminPostsPage from "@/pages/admin/posts"
 import AdminSettingsPage from "@/pages/admin/settings"
 import AdminTagsPage from "@/pages/admin/tags"
+import AdminThemeSettingsPage from "@/pages/admin/theme-settings"
 import AdminThemesPage from "@/pages/admin/themes"
 import ArchivePage from "@/pages/archive"
 import ArchiveMonthPage from "@/pages/archive-month"
@@ -69,6 +70,8 @@ export default function App() {
               <Route path="comments" element={<AdminCommentsPage />} />
               <Route path="plugins" element={<AdminPluginsPage />} />
               <Route path="themes" element={<AdminThemesPage />} />
+              {/* 当前激活主题的设置面板（仿 Typecho「外观 → 设置」） */}
+              <Route path="themes/settings" element={<AdminThemeSettingsPage />} />
               <Route path="settings" element={<AdminSettingsPage />} />
             </Route>
           </Route>

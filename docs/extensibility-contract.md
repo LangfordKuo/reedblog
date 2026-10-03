@@ -138,6 +138,88 @@ background = "240 10% 3.9%"
 - theme.css：以 `<link rel="stylesheet" href="/api/themes/:slug/theme.css">` 注入 head。
 - assets：theme.css 里引用 `/api/themes/:slug/assets/xxx` 绝对路径，后端静态托管。
 - 切换主题：后台设置激活主题 → 写入 config.toml `[theme] active = "slug"` → 前端下次加载生效（前端可主动重新拉取 active 并热切换，非强制）。
+- **主题设置**（2026-10-03 新增，见下节）：激活主题的生效设置在令牌之后应用——
+  值写入 `--theme-setting-*` CSS 变量与 `data-setting-*` / `data-layout` 属性，
+  是令牌管线之上的**叠加层**，不改动 tokens/tokens_dark 机制。
+
+### 主题设置项（theme.toml `[[settings]]`，2026-10-03 新增）
+
+每个主题可在 theme.toml 中声明自己的可配置项（仿 Typecho「外观 → 设置」），
+后台按声明渲染设置面板，值按主题 slug 独立持久化。
+
+```toml
+[[settings]]
+key = "layout"                    # 必填：^[a-z0-9][a-z0-9_-]{0,63}$，同一主题内唯一
+label = "页面布局"                 # 可选：面板显示名；缺省用 key
+type = "select"                   # 必填：text | textarea | color | select | switch | number
+group = "布局"                    # 可选：面板分组标题；缺省不分组
+default = "topbar-two-column"     # 可选：默认值（无声明默认值时该设置为"空"，前端回退）
+options = [                       # select 必填且非空；其余类型必须缺省
+  { value = "topbar-two-column", label = "顶栏导航 + 双列" },
+  { value = "topbar-minimal-three-column", label = "极简顶栏 + 三列" },
+]
+```
+
+- `options` 元素支持两种写法：字符串（value=label）或 `{value, label}` 内联表；
+  后端下发时**统一归一化为 `[{value, label}]`**。
+- `default` 的类型必须与 `type` 匹配：switch → bool；number → 整数或小数；
+  select → options 中的某个 value；color → `#RGB`/`#RRGGBB`/`#RRGGBBAA`（大小写不敏感）；
+  text/textarea → 字符串。
+- 声明校验（上传 zip 与后端解析共用）：key 非法/重复、type 未知、select 缺 options、
+  default 与类型不符、text 类 default 超长度限制 → 上传时 422 `invalid_manifest`。
+- 未声明 `[[settings]]` 的主题：接口返回空 `settings` 数组，面板显示
+  「该主题无自定义设置项」。
+
+**值的存储与类型转换**（PUT 保存时）：
+- 一律以规范化 TEXT 存入 `theme_settings` 表：switch → `"true"`/`"false"`
+  （也接受 JSON bool 与 `"true"`/`"false"` 字符串输入）；number → 规范化数字串
+  （接受 JSON number 或数字字符串）；color → 小写 hex；text/textarea/select → 原样字符串。
+- 长度上限：text ≤500 字符、textarea ≤5000 字符（按 char 计）。
+- 校验失败：key 未在声明内 → 422 `unknown_setting`；值与类型不符 / select 越界 /
+  color 非 hex / 超长 → 422 `invalid_value`。
+
+**生效值下发**（GET 响应中的 `values`）：声明的 `default` 与已存值合并
+（已存值优先），并按类型输出 JSON：switch → bool、number → number、其余 → string。
+
+**内置布局设置**（frontend 消费的系统级约定）：default 主题声明
+`key = "layout"` 的 select 设置，前端认识两个值：
+- `topbar-two-column`（默认）：顶栏导航 + 主内容/侧栏双列；
+- `topbar-minimal-three-column`：顶栏仅保留搜索与后台管理入口，正文左中右三列
+  （左：导航/分类，中：文章流，右：侧栏信息）。
+其他主题也可声明同 key 的 layout 设置复用这两套骨架；未声明 layout 或值未知时，
+前端回退 `topbar-two-column`。
+
+**前端应用约定**：
+- 每个设置值写入 `:root` 内联 CSS 变量 `--theme-setting-<key>`（key 中 `_` 换成 `-`，
+  如 `accent_color` → `--theme-setting-accent-color`）；theme.css 与内置组件用
+  `var(--theme-setting-…)` 消费，未设置时变量不存在、`var()` 自然回退。
+- 同时写 `data-setting-<key-dashes>="字符串化值"` 属性；layout 生效值额外写
+  `data-layout="<layout 值>"`（供布局组件与 theme.css 选择器读取）。
+- 切换/保存设置后立即重新拉取并应用，无需刷新页面；换主题时先清掉上一主题的
+  全部 `--theme-setting-*` 变量与 `data-setting-*` 属性再写入新值。
+
+### 主题设置 API
+
+公开（未安装门禁白名单，见第三部分）：
+- `GET /api/themes/:slug/settings` → 200
+  `{slug, settings: [ThemeSetting], values: {key: value}}`
+  - `ThemeSetting = {key, label, type, group?, default?, options?}`（options 已归一化）
+  - slug 磁盘上不存在（theme.toml 缺失/非法）→ 404 `not_found`；
+    `default` 主题在磁盘缺失时用后端内置常量兜底（同 themes/active 的兜底顺序）
+  - 未安装状态：DB 不可用，`values` = 声明默认值（保证安装页能拿到 default 主题设置）
+
+管理（需 Bearer）：
+- `GET /api/admin/themes/active/settings-panel` → 200
+  `{slug, name, settings, values}`（当前**激活主题**的声明 + 已存值合并；
+  管理入口只服务激活主题）
+- `PUT /api/admin/themes/:slug/settings` body `{values: {key: value, ...}}` → 200
+  响应与公开 GET 同形状（合并后的最新生效值）
+  - slug 未安装 → 404 `not_found`；`values` 为空对象 → 200（无改动）
+  - 校验见上节（422 `unknown_setting` / `invalid_value`）
+  - 部分更新语义：仅写入请求中出现的 key，未出现的已存值保持不变
+
+**生命周期**：主题设置按 slug 隔离——切换激活主题不清除任何主题的设置；
+**删除（卸载）主题时连带删除其 theme_settings 行**（重装后回到声明默认值）。
 
 ### 主题管理 API
 公开：
@@ -164,6 +246,8 @@ background = "240 10% 3.9%"
 ## 第三部分：门禁白名单更新
 not_installed 中间件白名单**新增**（未安装也可访问）：
 - `GET /api/themes/active`、`GET /api/themes/:slug/theme.css`、`GET /api/themes/:slug/assets/*`
+- `GET /api/themes/:slug/settings`（2026-10-03 主题设置新增：未安装时 values=声明默认值，
+  保证安装页能应用 default 主题的布局/配色设置；磁盘不存在的 slug 仍 404）
 - `GET /api/frontend/injections`
 
 （原有白名单：`GET /api/health`、`GET /api/install/status`、`POST /api/install` 不变。）
@@ -180,8 +264,12 @@ active = "default"
 
 ## 第五部分：数据表新增
 - `plugins`：slug TEXT PK, enabled INTEGER/BOOL, installed_at, updated_at
-- 主题不入 DB（磁盘 + config.toml active 足够）；如需缓存可加，但 active 权威来源是 config.toml。
+- 主题本体不入 DB（磁盘 + config.toml active 足够）；active 权威来源是 config.toml。
+- `theme_settings`（2026-10-03 主题设置新增）：theme_slug, key, value, updated_at；
+  主键 (theme_slug, key)，按主题 slug 隔离；value 为规范化 TEXT，
+  时间戳沿用全库 RFC3339 UTC 文本惯例；SQLite/MySQL 共用 SQL（Any 驱动，
+  `key` 列名用反引号引用——双方言均支持）。删除主题时连带删除其行。
 
 ## 迁移注意
-- 新增 `plugins` 表走 sqlx migration（SQLite + MySQL 各一份），migration 需对**已有安装**幂等（新表，不影响旧数据）。
-- 已安装站点升级后：首次启动自动补建 default 主题目录、建 plugins 表。
+- 新增 `plugins` / `theme_settings` 表走 sqlx migration（SQLite + MySQL 各一份），migration 需对**已有安装**幂等（新表，不影响旧数据）。
+- 已安装站点升级后：首次启动自动补建 default 主题目录、建 plugins / theme_settings 表。

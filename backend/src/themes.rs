@@ -15,7 +15,7 @@ use crate::packages;
 pub const BUILTIN_THEME_SLUG: &str = "default";
 
 /// 内置 default 主题 theme.toml（shadcn neutral 令牌，含暗色变体）
-pub const BUILTIN_DEFAULT_THEME_TOML: &str = r#"name = "默认主题"
+pub const BUILTIN_DEFAULT_THEME_TOML: &str = r##"name = "默认主题"
 slug = "default"
 version = "1.0.0"
 description = "内置简洁浅色主题"
@@ -63,7 +63,123 @@ destructive_foreground = "0 0% 98%"
 border = "0 0% 14.9%"
 input = "0 0% 14.9%"
 ring = "0 0% 83.1%"
-"#;
+
+# 主题设置项（扩展契约「主题设置项」条款）：后台按声明渲染设置面板，
+# 值按主题 slug 存 theme_settings 表。layout 为前端内置消费的系统级设置。
+[[settings]]
+key = "layout"
+label = "页面布局"
+type = "select"
+group = "布局"
+default = "topbar-two-column"
+options = [
+  { value = "topbar-two-column", label = "顶栏导航 + 双列" },
+  { value = "topbar-minimal-three-column", label = "极简顶栏 + 三列" },
+]
+
+[[settings]]
+key = "wide_layout"
+label = "宽幅正文"
+type = "switch"
+group = "布局"
+default = false
+
+[[settings]]
+key = "accent_color"
+label = "强调色"
+type = "color"
+group = "配色"
+default = "#0f172a"
+"##;
+
+/// 设置项 type 枚举（扩展契约「主题设置项」条款）
+pub const SETTING_TYPES: [&str; 6] = ["text", "textarea", "color", "select", "switch", "number"];
+
+/// select 选项（下发时统一归一化为 {value, label}；theme.toml 中也接受纯字符串）
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ThemeSettingOption {
+    pub value: String,
+    pub label: String,
+}
+
+/// theme.toml `[[settings]]` 单项声明
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThemeSettingDecl {
+    pub key: String,
+    /// 面板显示名；缺省（空）时归一化为 key
+    #[serde(default)]
+    pub label: String,
+    /// text | textarea | color | select | switch | number（TOML 字段名为 type）
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// 面板分组标题；缺省/空串不分组
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    /// 默认值（类型须与 kind 匹配，validate 强制）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<serde_json::Value>,
+    /// select 专用选项（字符串或 {value,label} 均可，反序列化时归一化）
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_options"
+    )]
+    pub options: Option<Vec<ThemeSettingOption>>,
+}
+
+/// options 兼容两种 TOML 写法：`"value"` 与 `{ value = "...", label = "..." }`
+fn deserialize_options<'de, D>(d: D) -> Result<Option<Vec<ThemeSettingOption>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum RawOption {
+        Str(String),
+        Obj {
+            value: String,
+            #[serde(default)]
+            label: Option<String>,
+        },
+    }
+    let raw: Option<Vec<RawOption>> = Option::deserialize(d)?;
+    Ok(raw.map(|items| {
+        items
+            .into_iter()
+            .map(|r| match r {
+                RawOption::Str(s) => ThemeSettingOption {
+                    label: s.clone(),
+                    value: s,
+                },
+                RawOption::Obj { value, label } => ThemeSettingOption {
+                    label: label.unwrap_or_else(|| value.clone()),
+                    value,
+                },
+            })
+            .collect()
+    }))
+}
+
+/// 设置项 key 合法性：^[a-z0-9][a-z0-9_-]{0,63}$（CSS 变量/data 属性片段，_ 下发时换 -）
+pub fn valid_setting_key(key: &str) -> bool {
+    let bytes = key.as_bytes();
+    if bytes.is_empty() || bytes.len() > 64 {
+        return false;
+    }
+    (bytes[0].is_ascii_lowercase() || bytes[0].is_ascii_digit())
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'_' || *b == b'-')
+}
+
+/// color 类型值校验：#RGB / #RRGGBB / #RRGGBBAA（大小写不敏感）
+pub fn valid_hex_color(v: &str) -> bool {
+    let b = v.as_bytes();
+    if b.is_empty() || b[0] != b'#' || !matches!(b.len(), 4 | 7 | 9) {
+        return false;
+    }
+    b[1..].iter().all(|c| c.is_ascii_hexdigit())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThemeManifest {
@@ -79,6 +195,9 @@ pub struct ThemeManifest {
     pub tokens: BTreeMap<String, String>,
     #[serde(default)]
     pub tokens_dark: Option<BTreeMap<String, String>>,
+    /// 主题设置项声明（可选；未声明的主题面板显示「该主题无自定义设置项」）
+    #[serde(default)]
+    pub settings: Vec<ThemeSettingDecl>,
 }
 
 impl ThemeManifest {
@@ -99,7 +218,132 @@ impl ThemeManifest {
         if !packages::valid_semver(&self.version) {
             return Err(format!("version '{}' 不是合法 semver", self.version));
         }
+        self.validate_settings()
+    }
+
+    /// 校验 [[settings]] 声明（契约「主题设置项」：key/type/options/default 规则）；
+    /// 上传 zip 与后端解析共用，违规 → 422 invalid_manifest
+    pub fn validate_settings(&self) -> Result<(), String> {
+        let mut seen = std::collections::HashSet::new();
+        for s in &self.settings {
+            if !valid_setting_key(&s.key) {
+                return Err(format!(
+                    "settings.key '{}' 非法（须匹配 ^[a-z0-9][a-z0-9_-]{{0,63}}$）",
+                    s.key
+                ));
+            }
+            if !seen.insert(&s.key) {
+                return Err(format!("settings.key '{}' 重复声明", s.key));
+            }
+            if !SETTING_TYPES.contains(&s.kind.as_str()) {
+                return Err(format!(
+                    "settings[{}].type '{}' 未知（须为 {} 之一）",
+                    s.key,
+                    s.kind,
+                    SETTING_TYPES.join(" / ")
+                ));
+            }
+            if s.group.as_deref().map(|g| g.chars().count()).unwrap_or(0) > 64 {
+                return Err(format!("settings[{}].group 过长（上限 64 字符）", s.key));
+            }
+            let is_select = s.kind == "select";
+            if is_select {
+                let opts = s
+                    .options
+                    .as_ref()
+                    .filter(|o| !o.is_empty())
+                    .ok_or_else(|| {
+                        format!("settings[{}]: type=select 必须声明非空 options", s.key)
+                    })?;
+                if opts.iter().any(|o| o.value.trim().is_empty()) {
+                    return Err(format!("settings[{}].options 含空 value", s.key));
+                }
+                let mut uniq = std::collections::HashSet::new();
+                for o in opts {
+                    if !uniq.insert(&o.value) {
+                        return Err(format!(
+                            "settings[{}].options 含重复 value '{}'",
+                            s.key, o.value
+                        ));
+                    }
+                }
+            } else if s.options.is_some() {
+                return Err(format!(
+                    "settings[{}]: 仅 type=select 允许声明 options",
+                    s.key
+                ));
+            }
+            if let Some(d) = &s.default {
+                validate_default(&s.key, &s.kind, s.options.as_deref(), d)?;
+            }
+        }
         Ok(())
+    }
+
+    /// 下发用归一化声明：label 缺省填 key、group 空串视为无
+    pub fn normalized_settings(&self) -> Vec<ThemeSettingDecl> {
+        self.settings
+            .iter()
+            .map(|s| ThemeSettingDecl {
+                key: s.key.clone(),
+                label: if s.label.trim().is_empty() {
+                    s.key.clone()
+                } else {
+                    s.label.trim().to_string()
+                },
+                kind: s.kind.clone(),
+                group: s
+                    .group
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|g| !g.is_empty())
+                    .map(str::to_string),
+                default: s.default.clone(),
+                options: s.options.clone(),
+            })
+            .collect()
+    }
+}
+
+/// default 值与 type 的匹配校验（契约「主题设置项」声明校验条款）
+fn validate_default(
+    key: &str,
+    kind: &str,
+    options: Option<&[ThemeSettingOption]>,
+    d: &serde_json::Value,
+) -> Result<(), String> {
+    use serde_json::Value as V;
+    let err = |msg: String| Err(format!("settings[{key}].default {msg}"));
+    match kind {
+        "switch" => match d {
+            V::Bool(_) => Ok(()),
+            _ => err("必须是 bool（type=switch）".into()),
+        },
+        "number" => match d {
+            V::Number(_) => Ok(()),
+            _ => err("必须是数字（type=number）".into()),
+        },
+        "select" => match d {
+            V::String(s) if options.is_some_and(|o| o.iter().any(|x| &x.value == s)) => Ok(()),
+            V::String(s) => err(format!("'{s}' 不在 options 内（type=select）")),
+            _ => err("必须是字符串（type=select）".into()),
+        },
+        "color" => match d {
+            V::String(s) if valid_hex_color(s) => Ok(()),
+            V::String(s) => err(format!("'{s}' 不是合法 hex 颜色（#RGB/#RRGGBB/#RRGGBBAA）")),
+            _ => err("必须是字符串（type=color）".into()),
+        },
+        // text / textarea
+        _ => match d {
+            V::String(s) => {
+                let max = if kind == "textarea" { 5000 } else { 500 };
+                if s.chars().count() > max {
+                    return err(format!("过长（type={kind} 上限 {max} 字符）"));
+                }
+                Ok(())
+            }
+            _ => err(format!("必须是字符串（type={kind}）")),
+        },
     }
 }
 
@@ -143,6 +387,36 @@ pub fn load_manifest(themes_dir: &Path, slug: &str) -> Option<ThemeManifest> {
     }
     let text = std::fs::read_to_string(theme_dir(themes_dir, slug).join("theme.toml")).ok()?;
     toml::from_str(&text).ok()
+}
+
+/// 读取 manifest；仅 default 主题在磁盘缺失/损坏时回退后端内置常量
+/// （themes/active 与 themes/:slug/settings 共用：保证任何情况下 default 可解析）
+pub fn load_manifest_or_builtin(themes_dir: &Path, slug: &str) -> Option<ThemeManifest> {
+    if let Some(m) = load_manifest(themes_dir, slug) {
+        if m.slug == slug {
+            return Some(m);
+        }
+    }
+    if slug == BUILTIN_THEME_SLUG {
+        return Some(builtin_default_manifest());
+    }
+    None
+}
+
+/// 内置 default 主题常量解析（TOML 由单元测试保证合法）
+pub fn builtin_default_manifest() -> ThemeManifest {
+    toml::from_str(BUILTIN_DEFAULT_THEME_TOML).expect("内置 default 主题 TOML 必须合法")
+}
+
+/// 解析激活主题 manifest（兜底顺序：active slug → default 磁盘 → 内置常量），
+/// 返回实际生效的 (slug, manifest)；themes/active 与 settings-panel 管理端点共用
+pub fn resolve_active_manifest(themes_dir: &Path, active_slug: &str) -> (String, ThemeManifest) {
+    for slug in [active_slug, BUILTIN_THEME_SLUG] {
+        if let Some(m) = load_manifest_or_builtin(themes_dir, slug) {
+            return (slug.to_string(), m);
+        }
+    }
+    (BUILTIN_THEME_SLUG.to_string(), builtin_default_manifest())
 }
 
 pub fn theme_dir(themes_dir: &Path, slug: &str) -> std::path::PathBuf {
@@ -203,17 +477,8 @@ pub fn list_themes(themes_dir: &Path, active_slug: &str) -> Vec<ThemeInfo> {
 /// GET /api/themes/active 响应：{slug, name, tokens, tokens_dark?, css_url|null, preview_url?}
 /// 任何情况下都返回可用主题：激活主题 → default 目录 → 内置常量兜底
 pub fn active_theme_response(themes_dir: &Path, active_slug: &str) -> Value {
-    for slug in [active_slug, BUILTIN_THEME_SLUG] {
-        if let Some(m) = load_manifest(themes_dir, slug) {
-            if m.slug == slug {
-                return manifest_to_active_json(m, themes_dir, slug);
-            }
-        }
-    }
-    // 磁盘上没有可用 default（如未安装且未生成）：用内置常量兜底
-    let m: ThemeManifest =
-        toml::from_str(BUILTIN_DEFAULT_THEME_TOML).expect("内置 default 主题 TOML 必须合法");
-    manifest_to_active_json(m, themes_dir, BUILTIN_THEME_SLUG)
+    let (slug, m) = resolve_active_manifest(themes_dir, active_slug);
+    manifest_to_active_json(m, themes_dir, &slug)
 }
 
 fn manifest_to_active_json(m: ThemeManifest, themes_dir: &Path, slug: &str) -> Value {

@@ -82,3 +82,27 @@ sidebar_accent = "217 33% 17%"
 sidebar_accent_foreground = "210 40% 92%"
 sidebar_border = "217 33% 20%"
 sidebar_ring = "199 89% 48%"
+
+# 主题设置项声明（docs/theme-development.md「主题设置项」章节）：
+# 后台「主题设置」面板按此渲染控件；值按主题 slug 独立存储（theme_settings 表），
+# 生效值由前端注入 CSS 变量 --theme-setting-<key（_ 换 -）> 与 data-setting-* 属性，
+# theme.css 与前端组件用 var() / 属性选择器消费（见本目录 theme.css 示例）。
+[[settings]]
+key = "accent_color"
+label = "强调色"
+type = "color"
+group = "配色"
+default = "#38bdf8"
+
+[[settings]]
+key = "glow_accent"
+label = "强调色发光选中效果"
+type = "switch"
+group = "配色"
+default = true
+
+[[settings]]
+key = "footer_notice"
+label = "页脚附加文字"
+type = "textarea"
+group = "其他"

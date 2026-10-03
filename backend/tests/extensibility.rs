@@ -152,7 +152,7 @@ fn hello_plugin_zip() -> Vec<u8> {
 
 // ---------- 示例主题 fixture ----------
 
-const MY_THEME_TOML: &str = r#"name = "测试主题"
+const MY_THEME_TOML: &str = r##"name = "测试主题"
 slug = "my-theme"
 version = "2.1.0"
 description = "集成测试用最小示例主题"
@@ -166,7 +166,24 @@ radius = "0.75rem"
 
 [tokens_dark]
 background = "0 0% 5%"
-"#;
+
+# 主题设置声明（扩展契约「主题设置项」条款；tests/theme_settings.rs 验证解析与读写）
+[[settings]]
+key = "accent_color"
+label = "强调色"
+type = "color"
+group = "配色"
+default = "#38bdf8"
+
+[[settings]]
+key = "show_footer_badge"
+type = "switch"
+default = true
+
+[[settings]]
+key = "notice"
+type = "textarea"
+"##;
 
 fn my_theme_zip() -> Vec<u8> {
     build_zip(&[
