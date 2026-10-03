@@ -26,6 +26,12 @@ export interface PostDetail extends PostPublic {
   content_md: string
 }
 
+/** GET /api/search 单条结果（契约「全文搜索」条款） */
+export interface SearchResult extends PostPublic {
+  /** 命中点附近的纯文本上下文片段（不含任何 markup）；高亮由前端实现 */
+  snippet: string
+}
+
 export type PostStatus = "draft" | "published"
 
 export interface PostAdmin {

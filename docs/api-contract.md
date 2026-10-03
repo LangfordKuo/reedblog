@@ -15,6 +15,7 @@ SiteInfo     = {title, subtitle, installed: bool}
 PostPublic   = {id, title, slug, excerpt, category: {id, name}|null,
                 tags: [{id, name}], published_at, comment_count}
 PostDetail   = PostPublic + {content_md}
+SearchResult = PostPublic + {snippet}   // snippet 为纯文本上下文片段，见「全文搜索」
 PostAdmin    = {id, title, slug, content_md, excerpt, status: "draft"|"published",
                 category_id|null, category_name|null, tag_ids: [int],
                 published_at|null, created_at, updated_at}
@@ -49,6 +50,20 @@ UploadResult = {url, size: <字节数>, filename: <原始文件名回显>}
 - `GET /api/tags` → `[Tag]`（post_count 只统计 published）
 - `GET /api/categories` → `[Category]`（同上）
 - `GET /api/archive` → `[{"year": int, "month": int, "count": int}]`，仅 published，按年月 DESC
+
+全文搜索（2026-10-03 新增）：
+- `GET /api/search?q=<关键词>&page&per_page` → 分页 `[SearchResult]`（复用总则分页壳），
+  仅 published，按 published_at DESC；分页参数与 `/api/posts` 相同
+  - 分词：q 按空白切分为词条（上限 8 个，多余忽略），**每个词条都必须命中**（AND 语义）；
+    匹配范围：title、excerpt、content_md 三列
+  - 实现约束：LIKE（SQLite/MySQL 共用一份 SQL，零迁移；**禁止** FTS5、MATCH…AGAINST 等单方言语法）；
+    词条内 LIKE 通配符 `%`、`_`、`\` 先行转义，配合 `ESCAPE '\'` 子句（双方言通用）
+  - 大小写：英文匹配大小写不敏感（依赖双方言 LIKE 的默认 CI 排序规则）
+  - q 缺失或 trim 后为空 → 400 `validation_error`
+  - snippet：把 content_md 按「excerpt 为空时的回退」同款规则剥成纯文本（不含任何 HTML/Markdown
+    markup），定位**任一词条的首个命中位置**（大小写不敏感），截取命中点前 ≤40 字符、后 ≤60 字符
+    的窗口（按 char 计，CJK 安全）；窗口两端非文本边界时补 `…`；纯文本中找不到命中
+    （仅 title/excerpt 命中）则回退为响应中的 excerpt。命中高亮由前端自行实现
 
 上传文件读取（2026-10-03 新增）：
 - `GET /api/uploads/*path` → 已上传图片的静态读取（公开、无需鉴权；不在未安装门禁白名单内，未安装时同样 503）

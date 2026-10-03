@@ -24,11 +24,13 @@ pub(crate) async fn read_zip_field(
             "需要 multipart/form-data，字段 file = zip 包",
         )
     })?;
-    while let Some(field) = mp
-        .next_field()
-        .await
-        .map_err(|e| ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "invalid_package", format!("multipart 解析失败: {e}")))?
-    {
+    while let Some(field) = mp.next_field().await.map_err(|e| {
+        ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_package",
+            format!("multipart 解析失败: {e}"),
+        )
+    })? {
         if field.name() == Some("file") {
             let bytes = field.bytes().await.map_err(|e| {
                 ApiError::new(

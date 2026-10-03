@@ -80,7 +80,8 @@ pub fn verify_token(secret: &str, token: &str) -> ApiResult<Claims> {
 
 /// 从 Authorization: Bearer <token> 头提取 token
 pub fn bearer_token(headers: &HeaderMap) -> Option<&str> {
-    let value = headers.get(axum::http::header::AUTHORIZATION)?
+    let value = headers
+        .get(axum::http::header::AUTHORIZATION)?
         .to_str()
         .ok()?;
     value.strip_prefix("Bearer ").map(|s| s.trim())

@@ -105,8 +105,13 @@ pub async fn feed_xml(State(state): State<AppState>, headers: HeaderMap) -> ApiR
         rt.site_subtitle.clone()
     };
 
-    let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rss version=\"2.0\">\n  <channel>\n");
-    xml.push_str(&format!("    <title>{}</title>\n", xml_escape(&rt.site_title)));
+    let mut xml = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rss version=\"2.0\">\n  <channel>\n",
+    );
+    xml.push_str(&format!(
+        "    <title>{}</title>\n",
+        xml_escape(&rt.site_title)
+    ));
     xml.push_str(&format!("    <link>{}</link>\n", xml_escape(&base)));
     xml.push_str(&format!(
         "    <description>{}</description>\n",
@@ -158,10 +163,7 @@ pub async fn feed_xml(State(state): State<AppState>, headers: HeaderMap) -> ApiR
 
 /// GET /api/sitemap.xml → urlset（application/xml; charset=utf-8）
 /// 首页 + 全部 published 文章（lastmod=updated_at，W3C datetime）+ 标签/分类/归档索引
-pub async fn sitemap_xml(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> ApiResult<Response> {
+pub async fn sitemap_xml(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Response> {
     let (pool, _db_type) = require_pool(&state).await?;
     let base = site_base_url(&state, &headers);
 
@@ -200,7 +202,11 @@ pub async fn sitemap_xml(
     }
     xml.push_str("</urlset>\n");
 
-    Ok(([(header::CONTENT_TYPE, "application/xml; charset=utf-8")], xml).into_response())
+    Ok((
+        [(header::CONTENT_TYPE, "application/xml; charset=utf-8")],
+        xml,
+    )
+        .into_response())
 }
 
 #[cfg(test)]

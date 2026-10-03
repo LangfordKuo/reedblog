@@ -14,6 +14,8 @@ A lightweight blog system written in Rust, with plugin & theme extensibility.
 - Comments: publish-first (visible immediately), with hide/restore/delete moderation in the admin panel
 - Image uploads: toolbar button, paste, or drag-and-drop in the editor (PNG/JPEG/GIF/WebP, real type detected via magic bytes, SVG rejected, 10MB default limit, configurable), sha256 content-hash deduplication, served via `/api/uploads/*` with immutable caching
 - RSS feed (`/api/feed.xml`, latest 20 posts) and sitemap (`/api/sitemap.xml`); absolute site URL from `[server] base_url` when set, otherwise derived from reverse-proxy headers (X-Forwarded-Proto/Host)
+- Full-text search: `GET /api/search` built on LIKE (works on both SQLite and MySQL with zero migrations; whitespace-split AND terms, wildcard escaping, published only); the shareable `/search` page highlights hits with `<mark>` and shows plain-text context snippets
+- Dark mode toggle: tri-state light/dark/system preference (persisted in localStorage, defaults to system), applied before first paint by an inline `<head>` script to prevent FOUC, with a one-click sun/moon toggle in the header
 - Frontend: code highlighting (highlight.js), responsive layout
 - Admin panel: dashboard, posts, categories, tags, comments, plugins, themes
 

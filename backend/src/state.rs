@@ -184,10 +184,7 @@ pub async fn connect_pool(db_type: &str, url: &str) -> Result<AnyPool, sqlx::Err
 }
 
 /// 按 db_type 跑对应的内嵌迁移（migrations/sqlite 或 migrations/mysql）
-pub async fn run_migrations(
-    db_type: &str,
-    conn: &mut AnyConnection,
-) -> Result<(), sqlx::Error> {
+pub async fn run_migrations(db_type: &str, conn: &mut AnyConnection) -> Result<(), sqlx::Error> {
     let migrator = match db_type {
         "sqlite" => sqlx::migrate!("migrations/sqlite"),
         "mysql" => sqlx::migrate!("migrations/mysql"),
@@ -220,4 +217,3 @@ pub async fn require_pool(state: &AppState) -> ApiResult<(AnyPool, String)> {
         _ => Err(crate::error::ApiError::not_installed()),
     }
 }
-

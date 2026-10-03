@@ -17,6 +17,7 @@ import type {
   PostPublic,
   PostSaveBody,
   PostStatus,
+  SearchResult,
   SiteInfo,
   Tag,
   ThemeInfo,
@@ -122,6 +123,12 @@ export interface PostQuery {
   month?: number
 }
 
+export interface SearchPostsQuery {
+  q: string
+  page?: number
+  per_page?: number
+}
+
 export interface AdminPostQuery {
   status?: PostStatus | "all"
   page?: number
@@ -151,6 +158,8 @@ export const api = {
   tags: () => request<Tag[]>("GET", "/tags"),
   categories: () => request<Category[]>("GET", "/categories"),
   archive: () => request<ArchiveMonth[]>("GET", "/archive"),
+  // 全文搜索（已安装后公开；q 为空后端会 400，调用方保证非空）
+  search: (q: SearchPostsQuery) => request<Page<SearchResult>>("GET", `/search${qs(q)}`),
 
   // 扩展系统公开接口（未安装门禁白名单内，无需鉴权）
   themeActive: () => request<ActiveTheme>("GET", "/themes/active"),

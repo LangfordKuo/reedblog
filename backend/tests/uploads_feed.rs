@@ -91,9 +91,7 @@ async fn upload_image(
 ) -> reqwest::Response {
     let part = reqwest::multipart::Part::bytes(data).file_name(filename.to_string());
     let form = reqwest::multipart::Form::new().part("file", part);
-    let mut req = c
-        .post(format!("{base}/api/admin/uploads"))
-        .multipart(form);
+    let mut req = c.post(format!("{base}/api/admin/uploads")).multipart(form);
     if let Some(t) = token {
         req = req.bearer_auth(t);
     }
@@ -120,7 +118,10 @@ fn png_bytes(total_len: usize) -> Vec<u8> {
 }
 
 fn sha256_hex(data: &[u8]) -> String {
-    Sha256::digest(data).iter().map(|b| format!("{b:02x}")).collect()
+    Sha256::digest(data)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 // ---------- 1. 图片上传：鉴权/成功链路/类型与大小校验/去重/穿越 ----------
@@ -283,7 +284,10 @@ async fn image_upload_flow() {
             r.status()
         );
         let text = r.text().await.unwrap();
-        assert!(!text.contains("jwt_secret"), "不得泄漏 config.toml: {attack}");
+        assert!(
+            !text.contains("jwt_secret"),
+            "不得泄漏 config.toml: {attack}"
+        );
     }
     // 合法路径但文件不存在 → 404
     let r = c
@@ -338,7 +342,10 @@ async fn feed_and_sitemap() {
     assert!(ct.starts_with("application/rss+xml"), "{ct}");
     assert!(ct.contains("charset=utf-8"), "{ct}");
     let xml = r.text().await.unwrap();
-    assert!(xml.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"), "{xml}");
+    assert!(
+        xml.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"),
+        "{xml}"
+    );
     assert!(xml.contains("<rss version=\"2.0\">"), "{xml}");
     // channel：站点标题 + 副标题
     assert!(xml.contains("<title>测试博客</title>"), "{xml}");
@@ -390,7 +397,11 @@ async fn feed_and_sitemap() {
     );
 
     // ---- sitemap.xml ----
-    let r = c.get(format!("{base}/api/sitemap.xml")).send().await.unwrap();
+    let r = c
+        .get(format!("{base}/api/sitemap.xml"))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), 200);
     let ct = r.headers().get("content-type").unwrap().to_str().unwrap();
     assert!(ct.starts_with("application/xml"), "{ct}");
@@ -402,10 +413,19 @@ async fn feed_and_sitemap() {
     );
     // 首页 / 文章 / 标签索引 / 分类索引 / 归档（前端真实路由）
     assert!(sm.contains(&format!("<loc>{base}/</loc>")), "{sm}");
-    assert!(sm.contains(&format!("<loc>{base}/posts/feed-post</loc>")), "{sm}");
-    assert!(sm.contains(&format!("<loc>{base}/posts/feed-esc</loc>")), "{sm}");
+    assert!(
+        sm.contains(&format!("<loc>{base}/posts/feed-post</loc>")),
+        "{sm}"
+    );
+    assert!(
+        sm.contains(&format!("<loc>{base}/posts/feed-esc</loc>")),
+        "{sm}"
+    );
     assert!(sm.contains(&format!("<loc>{base}/tags</loc>")), "{sm}");
-    assert!(sm.contains(&format!("<loc>{base}/categories</loc>")), "{sm}");
+    assert!(
+        sm.contains(&format!("<loc>{base}/categories</loc>")),
+        "{sm}"
+    );
     assert!(sm.contains(&format!("<loc>{base}/archive</loc>")), "{sm}");
     // 草稿不出现
     assert!(!sm.contains("draft-x"), "{sm}");
@@ -513,10 +533,16 @@ async fn base_url_config_overrides_headers() {
         .text()
         .await
         .unwrap();
-    assert!(sm.contains("<loc>https://configured.example.org/</loc>"), "{sm}");
+    assert!(
+        sm.contains("<loc>https://configured.example.org/</loc>"),
+        "{sm}"
+    );
     assert!(
         sm.contains("<loc>https://configured.example.org/posts/cfg-post</loc>"),
         "{sm}"
     );
-    assert!(sm.contains("<loc>https://configured.example.org/tags</loc>"), "{sm}");
+    assert!(
+        sm.contains("<loc>https://configured.example.org/tags</loc>"),
+        "{sm}"
+    );
 }

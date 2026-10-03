@@ -420,7 +420,11 @@ impl PluginHost {
         }
 
         let src = self.load_and_check_script(slug).map_err(|e| {
-            ApiError::new(axum::http::StatusCode::UNPROCESSABLE_ENTITY, "script_error", e)
+            ApiError::new(
+                axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+                "script_error",
+                e,
+            )
         })?;
 
         let now = now_rfc3339();
@@ -611,36 +615,34 @@ impl PluginHost {
             ctx.insert("email".into(), mail.clone().into());
             ctx.insert("content".into(), body.clone().into());
             match Self::invoke_map(&script, &hook_fn_name(hook_id), ctx) {
-                Ok(m) => {
-                    match map_string(&m, "action").as_deref() {
-                        Some("block") => {
-                            self.note_hook_ok(&pslug).await;
-                            return CommentDecision::Block {
-                                reason: map_string(&m, "reason").unwrap_or_default(),
-                            };
-                        }
-                        Some("allow") => {
-                            if let Some(a) = map_string(&m, "author_name") {
-                                author = a;
-                            }
-                            if let Some(e) = map_string(&m, "email") {
-                                mail = e;
-                            }
-                            if let Some(c) = map_string(&m, "content") {
-                                body = c;
-                            }
-                            self.note_hook_ok(&pslug).await;
-                        }
-                        _ => {
-                            self.note_hook_error(
-                                &pslug,
-                                hook_id,
-                                "返回值缺少 action（须为 \"allow\" 或 \"block\"）",
-                            )
-                            .await
-                        }
+                Ok(m) => match map_string(&m, "action").as_deref() {
+                    Some("block") => {
+                        self.note_hook_ok(&pslug).await;
+                        return CommentDecision::Block {
+                            reason: map_string(&m, "reason").unwrap_or_default(),
+                        };
                     }
-                }
+                    Some("allow") => {
+                        if let Some(a) = map_string(&m, "author_name") {
+                            author = a;
+                        }
+                        if let Some(e) = map_string(&m, "email") {
+                            mail = e;
+                        }
+                        if let Some(c) = map_string(&m, "content") {
+                            body = c;
+                        }
+                        self.note_hook_ok(&pslug).await;
+                    }
+                    _ => {
+                        self.note_hook_error(
+                            &pslug,
+                            hook_id,
+                            "返回值缺少 action（须为 \"allow\" 或 \"block\"）",
+                        )
+                        .await
+                    }
+                },
                 Err(e) => self.note_hook_error(&pslug, hook_id, &e).await,
             }
         }

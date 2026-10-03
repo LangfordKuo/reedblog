@@ -40,6 +40,15 @@ pub struct PostDetail {
     pub content_html: String,
 }
 
+/// 搜索结果单条（契约「全文搜索」条款）：PostPublic 全字段 + snippet。
+/// snippet 为纯文本上下文片段（不含任何 HTML/Markdown markup），命中高亮由前端实现。
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchResult {
+    #[serde(flatten)]
+    pub post: PostPublic,
+    pub snippet: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PostAdmin {
     pub id: i64,
@@ -226,9 +235,7 @@ fn default_per_page() -> i64 {
 /// 归一化分页参数：page 最小 1；per_page 默认 10、上限 100。
 pub fn normalize_paging(page: Option<i64>, per_page: Option<i64>) -> (i64, i64) {
     let page = page.unwrap_or_else(default_page).max(1);
-    let per_page = per_page
-        .unwrap_or_else(default_per_page)
-        .clamp(1, 100);
+    let per_page = per_page.unwrap_or_else(default_per_page).clamp(1, 100);
     (page, per_page)
 }
 
@@ -246,6 +253,17 @@ pub struct PostsQuery {
     pub year: Option<i64>,
     #[serde(default)]
     pub month: Option<i64>,
+}
+
+/// GET /api/search 查询参数；q 缺失或 trim 后为空 → 400 validation_error
+#[derive(Debug, Clone, Deserialize)]
+pub struct SearchQuery {
+    #[serde(default)]
+    pub q: Option<String>,
+    #[serde(default)]
+    pub page: Option<i64>,
+    #[serde(default)]
+    pub per_page: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

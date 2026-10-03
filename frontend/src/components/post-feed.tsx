@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, type ReactNode } from "react"
 import { Link, useSearchParams } from "react-router-dom"
 import { CalendarDaysIcon, FolderIcon, MessageSquareIcon } from "lucide-react"
 
@@ -103,7 +103,17 @@ export function PostFeed({ tag, category, year, month, heading }: PostFeedProps)
   )
 }
 
-function PostCard({ post }: { post: PostPublic }) {
+interface PostCardProps {
+  post: PostPublic
+  /** 标题渲染覆盖（搜索页用来注入 <mark> 高亮）；缺省渲染 post.title */
+  titleNode?: ReactNode
+  /** 摘要渲染覆盖（搜索页用来显示高亮后的 snippet）；缺省渲染 post.excerpt */
+  excerptNode?: ReactNode
+}
+
+/** 文章卡片（首页/列表页与搜索结果共用；标题与摘要可用 React 节点覆盖） */
+export function PostCard({ post, titleNode, excerptNode }: PostCardProps) {
+  const excerpt = excerptNode ?? post.excerpt
   return (
     <article className="flex flex-col gap-2">
       <h2 className="text-xl font-semibold tracking-tight">
@@ -111,7 +121,7 @@ function PostCard({ post }: { post: PostPublic }) {
           to={`/posts/${encodeURIComponent(post.slug)}`}
           className="underline-offset-4 hover:underline"
         >
-          {post.title}
+          {titleNode ?? post.title}
         </Link>
       </h2>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
@@ -140,9 +150,9 @@ function PostCard({ post }: { post: PostPublic }) {
           </Link>
         ))}
       </div>
-      {post.excerpt && (
-        <p className="line-clamp-3 text-sm text-muted-foreground">{post.excerpt}</p>
-      )}
+      {excerpt ? (
+        <p className="line-clamp-3 text-sm text-muted-foreground">{excerpt}</p>
+      ) : null}
       <div>
         <Link
           to={`/posts/${encodeURIComponent(post.slug)}`}

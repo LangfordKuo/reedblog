@@ -5,6 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="reedblog - 一个简洁的博客系统" />
     <title>reedblog</title>
+    <script>
+      // 防 FOUC：首绘前按颜色模式偏好（localStorage: reedblog-color-mode，默认 system）
+      // 同步给 <html> 加 dark class；localStorage 被禁用时静默跳过。
+      ;(function () {
+        try {
+          var mode = localStorage.getItem("reedblog-color-mode")
+          var dark =
+            mode === "dark" ||
+            (mode !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches)
+          if (dark) document.documentElement.classList.add("dark")
+        } catch (e) {}
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

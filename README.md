@@ -15,6 +15,8 @@ A lightweight blog system written in Rust, with plugin & theme extensibility.
 - 评论：先发后审（创建即公开），后台可隐藏/恢复/删除
 - 图片上传：编辑器工具栏 / 粘贴 / 拖拽即传（PNG/JPEG/GIF/WebP，按 magic bytes 判定真实类型，SVG 拒绝，上限默认 10MB 可配），sha256 内容哈希去重，经 `/api/uploads/*` 静态托管（immutable 强缓存）
 - RSS 订阅（`/api/feed.xml`，最新 20 篇）与 sitemap（`/api/sitemap.xml`）；站点绝对 URL 支持 `[server] base_url` 配置，为空时按反代头（X-Forwarded-Proto/Host）推导
+- 全文搜索：`GET /api/search` 用 LIKE 实现（SQLite/MySQL 双方言零迁移，词条空白切分 AND 语义、通配符转义、仅 published），前端 `/search` 页 URL 携带查询词可分享，命中词 `<mark>` 高亮并显示纯文本上下文 snippet
+- 前台暗色切换：light/dark/system 三态偏好（localStorage 持久化，默认跟随系统），`<head>` 内联脚本在首绘前应用防 FOUC，header sun/moon 一键直切
 - 前台：文章代码高亮（highlight.js）、响应式布局
 - 后台管理面板：仪表盘、文章、分类、标签、评论、插件、主题
 

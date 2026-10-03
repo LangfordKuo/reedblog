@@ -1,6 +1,10 @@
-import { Link, NavLink } from "react-router-dom"
+import { useEffect, useState, type FormEvent } from "react"
+import { Link, NavLink, useNavigate } from "react-router-dom"
+import { MoonIcon, SearchIcon, SunIcon } from "lucide-react"
 
-import { buttonVariants } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { isDarkRendered, setColorMode } from "@/lib/color-mode"
 import type { SiteInfo } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -11,6 +15,34 @@ const navLinkClass = ({ isActive }: { isActive: boolean }) =>
   )
 
 export function SiteHeader({ site }: { site: SiteInfo | null }) {
+  const navigate = useNavigate()
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [keyword, setKeyword] = useState("")
+  const [dark, setDark] = useState(isDarkRendered)
+
+  // system 态下系统偏好变化时，color-mode 的单例监听会先改 <html> 的 class，
+  // 这里跟随刷新图标（监听注册顺序在 color-mode 之后，读到的是切换后的状态）
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)")
+    const sync = () => setDark(isDarkRendered())
+    mq.addEventListener("change", sync)
+    return () => mq.removeEventListener("change", sync)
+  }, [])
+
+  // 搜索入口：icon 点击展开输入框，回车/提交 → /search?q=…（URL 携带查询词）
+  const submitSearch = (e: FormEvent) => {
+    e.preventDefault()
+    const kw = keyword.trim()
+    setSearchOpen(false)
+    navigate(kw ? `/search?q=${encodeURIComponent(kw)}` : "/search")
+  }
+
+  // 暗色切换：双态直切（当前暗→light，当前亮→dark；点了就固化选择，不再回 system）
+  const toggleDark = () => {
+    setColorMode(dark ? "light" : "dark")
+    setDark(isDarkRendered())
+  }
+
   return (
     <header className="sticky top-0 z-40 border-b bg-background/90 backdrop-blur">
       <div className="mx-auto flex h-16 w-full max-w-5xl items-center justify-between gap-4 px-4">
@@ -25,6 +57,34 @@ export function SiteHeader({ site }: { site: SiteInfo | null }) {
           )}
         </Link>
         <nav className="flex items-center gap-0.5">
+          {searchOpen ? (
+            <form onSubmit={submitSearch} className="mr-1 flex items-center">
+              <Input
+                autoFocus
+                value={keyword}
+                onChange={(e) => setKeyword(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    setSearchOpen(false)
+                    setKeyword("")
+                  }
+                }}
+                placeholder="搜索…"
+                aria-label="搜索关键词"
+                className="h-8 w-32 sm:w-48"
+              />
+            </form>
+          ) : (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-8 text-muted-foreground"
+              aria-label="打开搜索"
+              onClick={() => setSearchOpen(true)}
+            >
+              <SearchIcon className="size-4" />
+            </Button>
+          )}
           <NavLink to="/" end className={navLinkClass}>
             首页
           </NavLink>
@@ -37,6 +97,17 @@ export function SiteHeader({ site }: { site: SiteInfo | null }) {
           <NavLink to="/tags" className={navLinkClass}>
             标签
           </NavLink>
+          {/* 暗色切换：图标显示与当前渲染模式相反（即"点了会切到什么"） */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="ml-1 size-8 text-muted-foreground"
+            aria-label={dark ? "切换为亮色模式" : "切换为暗色模式"}
+            title={dark ? "切换为亮色模式" : "切换为暗色模式"}
+            onClick={toggleDark}
+          >
+            {dark ? <SunIcon className="size-4" /> : <MoonIcon className="size-4" />}
+          </Button>
           <Link
             to="/admin"
             className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "ml-1")}

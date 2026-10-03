@@ -65,9 +65,8 @@ pub async fn admin_list_comments(
         format!("WHERE {}", where_parts.join(" AND "))
     };
 
-    let count_sql = format!(
-        "SELECT COUNT(*) FROM comments c JOIN posts p ON p.id = c.post_id {where_sql}"
-    );
+    let count_sql =
+        format!("SELECT COUNT(*) FROM comments c JOIN posts p ON p.id = c.post_id {where_sql}");
     let mut cq = sqlx::query(&count_sql);
     if let Some(s) = &status_param {
         cq = cq.bind(s.clone());

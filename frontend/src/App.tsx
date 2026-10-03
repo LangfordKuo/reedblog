@@ -22,6 +22,7 @@ import HomePage from "@/pages/home"
 import InstallPage from "@/pages/install"
 import NotFoundPage from "@/pages/not-found"
 import PostDetailPage from "@/pages/post-detail"
+import SearchPage from "@/pages/search"
 import TagIndexPage from "@/pages/tag-index"
 import TagPostsPage from "@/pages/tag-posts"
 
@@ -43,6 +44,7 @@ export default function App() {
             <Route path="categories/:name" element={<CategoryPostsPage />} />
             <Route path="archive" element={<ArchivePage />} />
             <Route path="archive/:year/:month" element={<ArchiveMonthPage />} />
+            <Route path="search" element={<SearchPage />} />
           </Route>
 
           {/* 管理后台 */}

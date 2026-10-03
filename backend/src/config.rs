@@ -312,8 +312,15 @@ mod tests {
                 .as_str()
                 .parse()
                 .unwrap_or_else(|e| panic!("{url} 往返后无法解析为 SqliteConnectOptions: {e}"));
-            let got = sqlite_opts.get_filename().to_string_lossy().replace('\\', "/");
-            assert_eq!(got, path.replace('\\', "/"), "路径 {path} 往返后不一致 (url={url})");
+            let got = sqlite_opts
+                .get_filename()
+                .to_string_lossy()
+                .replace('\\', "/");
+            assert_eq!(
+                got,
+                path.replace('\\', "/"),
+                "路径 {path} 往返后不一致 (url={url})"
+            );
         }
     }
 }

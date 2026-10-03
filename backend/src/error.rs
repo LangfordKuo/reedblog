@@ -42,7 +42,11 @@ impl ApiError {
     }
 
     pub fn unauthorized() -> Self {
-        Self::new(StatusCode::UNAUTHORIZED, "unauthorized", "未授权或登录已过期")
+        Self::new(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "未授权或登录已过期",
+        )
     }
 
     pub fn invalid_credentials() -> Self {

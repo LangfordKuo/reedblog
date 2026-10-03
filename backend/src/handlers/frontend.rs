@@ -11,8 +11,8 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 
 use crate::packages;
-use crate::themes;
 use crate::state::AppState;
+use crate::themes;
 
 /// GET /api/frontend/injections → {"head":[{plugin,html}], "body_end":[...]}
 /// 仅返回 enabled 且声明了对应 inject 的插件；未安装/无插件 → 空数组
@@ -38,11 +38,7 @@ pub async fn theme_css(State(state): State<AppState>, Path(slug): Path<String>) 
     }
     let path = themes::theme_dir(state.themes_dir(), &slug).join("theme.css");
     match std::fs::read(&path) {
-        Ok(body) => (
-            [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
-            body,
-        )
-            .into_response(),
+        Ok(body) => ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], body).into_response(),
         Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
 }
@@ -95,11 +91,7 @@ pub async fn theme_asset(
         return StatusCode::NOT_FOUND.into_response();
     }
     match std::fs::read(&target_canon) {
-        Ok(body) => (
-            [(header::CONTENT_TYPE, themes::mime_for(&rel))],
-            body,
-        )
-            .into_response(),
+        Ok(body) => ([(header::CONTENT_TYPE, themes::mime_for(&rel))], body).into_response(),
         Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
 }

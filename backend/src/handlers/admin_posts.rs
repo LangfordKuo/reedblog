@@ -301,7 +301,10 @@ pub async fn admin_update_post(
     };
 
     let mut slug = existing.slug.clone();
-    if let Some(s) = body.slug.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    if let Some(s) = body
+        .slug
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
     {
         if s != slug {
             if slug_taken(&pool, &s, Some(id)).await? {

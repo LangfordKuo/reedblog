@@ -53,6 +53,12 @@ pub fn temp_slug() -> String {
 /// 代码块内容整体丢弃，多个空白折叠为单个空格，截断至 ≤200 字符（按 char，CJK 安全；
 /// 截断时末位补省略号，总长仍 ≤200）。
 pub fn derive_excerpt(content_md: &str) -> String {
+    truncate_chars(&md_to_plain_text(content_md), 200)
+}
+
+/// Markdown → 纯文本（不截断）：derive_excerpt 与搜索 snippet 共用的同一条剥离逻辑
+/// （契约「全文搜索」条款要求 snippet 用 derive_excerpt 同款规则，勿复制实现）。
+pub fn md_to_plain_text(content_md: &str) -> String {
     let mut kept: Vec<String> = Vec::new();
     let mut in_code_block = false;
     for line in content_md.lines() {
@@ -75,13 +81,85 @@ pub fn derive_excerpt(content_md: &str) -> String {
             kept.push(cleaned);
         }
     }
-    let flat = kept
-        .join(" ")
+    kept.join(" ")
         .split_whitespace()
         .filter(|tok| !is_separator_token(tok))
         .collect::<Vec<_>>()
-        .join(" ");
-    truncate_chars(&flat, 200)
+        .join(" ")
+}
+
+// ---------- 全文搜索（契约「全文搜索」条款） ----------
+
+/// 搜索词条数上限（q 按空白切分，多余词条忽略）
+const MAX_SEARCH_TERMS: usize = 8;
+
+/// snippet 窗口：命中点前 ≤40 字符、后 ≤60 字符（按 char 计，CJK 安全）
+const SNIPPET_BEFORE: usize = 40;
+const SNIPPET_AFTER: usize = 60;
+
+/// 搜索分词：trim 后按空白切分，上限 8 个词条（多余忽略）
+pub fn split_search_terms(q: &str) -> Vec<String> {
+    q.split_whitespace()
+        .take(MAX_SEARCH_TERMS)
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// LIKE 通配符转义：`\`、`%`、`_` 前补 `\`，配合 `ESCAPE '\'` 子句
+/// （SQLite/MySQL 通用；防止用户输入 `%`/`_` 把搜索变成全匹配）
+pub fn escape_like(term: &str) -> String {
+    let mut out = String::with_capacity(term.len());
+    for c in term.chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// 单字符小写化（保持 char 数 1:1，避免特殊字符小写展开导致下标错位）
+fn lower_char(c: char) -> char {
+    c.to_lowercase().next().unwrap_or(c)
+}
+
+/// 生成搜索 snippet：在 content_md 剥出的纯文本中定位任一词条的首个命中位置
+/// （大小写不敏感），截取命中点前 ≤40、后 ≤60 字符的窗口；窗口两端非文本边界时补 `…`。
+/// 纯文本中找不到命中（仅 title/excerpt 命中）→ 回退 fallback_excerpt。
+/// 输出不含任何 HTML/Markdown markup，高亮由前端实现。
+pub fn make_snippet(plain: &str, terms: &[String], fallback_excerpt: &str) -> String {
+    let chars: Vec<char> = plain.chars().collect();
+    let lower: Vec<char> = chars.iter().copied().map(lower_char).collect();
+
+    // 任一词条的最早命中位置（词条自身也按小写比较）
+    let mut hit: Option<(usize, usize)> = None;
+    for term in terms {
+        let t: Vec<char> = term.chars().map(lower_char).collect();
+        if t.is_empty() || t.len() > lower.len() {
+            continue;
+        }
+        if let Some(pos) = lower.windows(t.len()).position(|w| w == t.as_slice()) {
+            if hit.map_or(true, |(s, _)| pos < s) {
+                hit = Some((pos, pos + t.len()));
+            }
+        }
+    }
+    let Some((hit_start, hit_end)) = hit else {
+        return fallback_excerpt.to_string();
+    };
+
+    let from = hit_start.saturating_sub(SNIPPET_BEFORE);
+    let to = (hit_end + SNIPPET_AFTER).min(chars.len());
+    let mut out = String::new();
+    if from > 0 {
+        out.push('…');
+    }
+    let window: String = chars[from..to].iter().collect();
+    out.push_str(window.trim());
+    if to < chars.len() {
+        out.push('…');
+    }
+    out
 }
 
 /// 纯分隔符 token：全由 `-`/`=`/`:`/`|` 组成且长度 ≥2（单行化表格分隔线 |------| 去竖线后的残留）
@@ -299,20 +377,15 @@ pub async fn fetch_post_tags(pool: &AnyPool, post_id: i64) -> ApiResult<Vec<Cate
 
 /// 查某篇文章的 tag_ids（管理形状，按 tag id 排序）
 pub async fn fetch_tag_ids(pool: &AnyPool, post_id: i64) -> ApiResult<Vec<i64>> {
-    let rows =
-        sqlx::query("SELECT tag_id FROM post_tags WHERE post_id = ? ORDER BY tag_id")
-            .bind(post_id)
-            .fetch_all(pool)
-            .await?;
+    let rows = sqlx::query("SELECT tag_id FROM post_tags WHERE post_id = ? ORDER BY tag_id")
+        .bind(post_id)
+        .fetch_all(pool)
+        .await?;
     Ok(rows.iter().map(|r| r.get::<i64, _>("tag_id")).collect())
 }
 
 /// 全量替换文章的标签关联（忽略不存在的 tag_id）
-pub async fn replace_post_tags(
-    pool: &AnyPool,
-    post_id: i64,
-    tag_ids: &[i64],
-) -> ApiResult<()> {
+pub async fn replace_post_tags(pool: &AnyPool, post_id: i64, tag_ids: &[i64]) -> ApiResult<()> {
     sqlx::query("DELETE FROM post_tags WHERE post_id = ?")
         .bind(post_id)
         .execute(pool)
@@ -335,11 +408,7 @@ pub async fn replace_post_tags(
 }
 
 /// slug 是否已被占用（exclude_id 用于更新时排除自身）
-pub async fn slug_taken(
-    pool: &AnyPool,
-    slug: &str,
-    exclude_id: Option<i64>,
-) -> ApiResult<bool> {
+pub async fn slug_taken(pool: &AnyPool, slug: &str, exclude_id: Option<i64>) -> ApiResult<bool> {
     let (sql, count) = match exclude_id {
         Some(id) => (
             "SELECT COUNT(*) FROM posts WHERE slug = ? AND id <> ?",
@@ -478,7 +547,10 @@ mod tests {
         // 未闭合围栏：其余内容全部丢弃
         assert_eq!(derive_excerpt("开头\n```\ncode"), "开头");
         // 行内代码只去反引号、保留内容
-        assert_eq!(derive_excerpt("用 `cargo build` 命令"), "用 cargo build 命令");
+        assert_eq!(
+            derive_excerpt("用 `cargo build` 命令"),
+            "用 cargo build 命令"
+        );
     }
 
     #[test]
@@ -535,6 +607,101 @@ mod tests {
         assert_eq!(legacy_flat_excerpt(md), "## T 正文 **加粗**");
         assert_eq!(derive_excerpt(md), "T 正文 加粗");
         // 纯文本内容两者一致（修复为无害重写，条件 excerpt != fixed 会跳过）
-        assert_eq!(legacy_flat_excerpt("draft body"), derive_excerpt("draft body"));
+        assert_eq!(
+            legacy_flat_excerpt("draft body"),
+            derive_excerpt("draft body")
+        );
+    }
+
+    // ---------- 全文搜索工具 ----------
+
+    #[test]
+    fn escape_like_escapes_wildcards() {
+        assert_eq!(escape_like("100%"), r"100\%");
+        assert_eq!(escape_like("a_b"), r"a\_b");
+        assert_eq!(escape_like(r"c:\path"), r"c:\\path");
+        assert_eq!(escape_like("%_\\"), r"\%\_\\");
+        // 普通词条原样保留
+        assert_eq!(escape_like("rust 入门"), "rust 入门");
+        assert_eq!(escape_like(""), "");
+    }
+
+    #[test]
+    fn split_terms_trims_and_caps_at_eight() {
+        assert_eq!(split_search_terms("  rust   axum "), ["rust", "axum"]);
+        assert!(split_search_terms("   ").is_empty());
+        assert!(split_search_terms("").is_empty());
+        let many: Vec<String> = (0..12).map(|i| format!("t{i}")).collect();
+        let terms = split_search_terms(&many.join(" "));
+        assert_eq!(terms.len(), 8);
+        assert_eq!(terms[0], "t0");
+        assert_eq!(terms[7], "t7");
+    }
+
+    #[test]
+    fn snippet_window_truncates_with_ellipsis() {
+        // 命中点前后都超长 → 两端 `…`，前 ≤40 后 ≤60（按 char，CJK 安全）
+        let plain = format!("{}命中{}尾", "前".repeat(100), "后".repeat(100));
+        let s = make_snippet(&plain, &["命中".to_string()], "回退摘要");
+        assert!(s.starts_with('…'), "{s}");
+        assert!(s.ends_with('…'), "{s}");
+        assert_eq!(s.chars().count(), 1 + 40 + 2 + 60 + 1);
+        assert!(s.contains("命中"));
+        assert!(!s.contains("回退摘要"));
+    }
+
+    #[test]
+    fn snippet_short_text_no_ellipsis_and_case_insensitive() {
+        // 文本不足窗口 → 原样返回、不加 `…`；命中大小写不敏感、保留原文大小写
+        assert_eq!(
+            make_snippet("学习 Rust 很有趣", &["RUST".to_string()], "fb"),
+            "学习 Rust 很有趣"
+        );
+        assert_eq!(
+            make_snippet("Hello World", &["hello".to_string()], "fb"),
+            "Hello World"
+        );
+    }
+
+    #[test]
+    fn snippet_first_hit_among_multiple_terms() {
+        // 多词条命中时取文本中位置最早的命中点
+        let plain = "alpha one beta two";
+        let s = make_snippet(plain, &["two".to_string(), "one".to_string()], "fb");
+        assert!(s.contains("one"));
+        assert_eq!(s, plain); // 短文本整段返回
+    }
+
+    #[test]
+    fn snippet_falls_back_to_excerpt_when_not_in_plain_text() {
+        // 词条仅命中 title/excerpt，纯文本中找不到 → 回退 excerpt
+        let s = make_snippet("body text only", &["标题词".to_string()], "这是回退摘要");
+        assert_eq!(s, "这是回退摘要");
+        let s = make_snippet("", &["anything".to_string()], "摘要B");
+        assert_eq!(s, "摘要B");
+    }
+
+    #[test]
+    fn snippet_contains_no_markup() {
+        // snippet 基于剥净的纯文本：markdown 符号不得出现
+        let md = "## 标题\n\n**加粗**内容 `code` 与 needle 在此";
+        let plain = md_to_plain_text(md);
+        let s = make_snippet(&plain, &["needle".to_string()], "fb");
+        assert!(s.contains("needle"));
+        for sym in ['#', '*', '`'] {
+            assert!(!s.contains(sym), "snippet 不应包含 {sym}：{s}");
+        }
+    }
+
+    #[test]
+    fn plain_text_shared_with_derive_excerpt() {
+        // derive_excerpt = md_to_plain_text + 200 截断（同一逻辑，无复制粘贴）
+        let md = "# 标题\n\n正文 **加粗**";
+        assert_eq!(md_to_plain_text(md), "标题 正文 加粗");
+        assert_eq!(derive_excerpt(md), md_to_plain_text(md));
+        // 超 200 才截断
+        let long = "字".repeat(300);
+        assert_eq!(md_to_plain_text(&long).chars().count(), 300);
+        assert_eq!(derive_excerpt(&long).chars().count(), 200);
     }
 }

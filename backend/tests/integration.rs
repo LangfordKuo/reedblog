@@ -94,7 +94,10 @@ async fn not_installed_gate() {
         .await
         .unwrap();
     assert_eq!(r.status(), 200);
-    assert_eq!(r.json::<Value>().await.unwrap(), json!({"installed": false}));
+    assert_eq!(
+        r.json::<Value>().await.unwrap(),
+        json!({"installed": false})
+    );
 
     // 其余 /api/*（含未定义路径）一律 503 not_installed
     let paths = [
@@ -103,6 +106,7 @@ async fn not_installed_gate() {
         "/api/tags",
         "/api/categories",
         "/api/archive",
+        "/api/search",
         "/api/auth/me",
         "/api/admin/posts",
         "/api/admin/comments",
@@ -161,7 +165,10 @@ async fn install_login_publish_comment_flow() {
     let status = r.status();
     let text = r.text().await.unwrap();
     assert_eq!(status, 201, "install 失败: {text}");
-    assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), json!({"ok": true}));
+    assert_eq!(
+        serde_json::from_str::<Value>(&text).unwrap(),
+        json!({"ok": true})
+    );
 
     // config.toml 已写入且含 jwt_secret
     let cfg_text = std::fs::read_to_string(&cfg_path).unwrap();
@@ -225,11 +232,7 @@ async fn install_login_publish_comment_flow() {
     assert!(v["expires_at"].as_str().unwrap().ends_with('Z'));
 
     // /api/auth/me：无 token / 坏 token → 401 unauthorized；好 token → {"username"}
-    let r = c
-        .get(format!("{base}/api/auth/me"))
-        .send()
-        .await
-        .unwrap();
+    let r = c.get(format!("{base}/api/auth/me")).send().await.unwrap();
     assert_eq!(r.status(), 401);
     assert_eq!(err_code(r).await, "unauthorized");
     let r = c

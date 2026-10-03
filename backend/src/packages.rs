@@ -150,21 +150,18 @@ pub fn extract_single_root_zip(data: &[u8], staging: &Path) -> Result<String, Ap
             .iter()
             .fold(staging.to_path_buf(), |p, s| p.join(s));
         if file.is_dir() {
-            std::fs::create_dir_all(&out).map_err(|e| {
-                ApiError::internal(format!("创建目录失败 {}: {e}", out.display()))
-            })?;
+            std::fs::create_dir_all(&out)
+                .map_err(|e| ApiError::internal(format!("创建目录失败 {}: {e}", out.display())))?;
         } else {
             if let Some(parent) = out.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| {
                     ApiError::internal(format!("创建目录失败 {}: {e}", parent.display()))
                 })?;
             }
-            let mut of = std::fs::File::create(&out).map_err(|e| {
-                ApiError::internal(format!("写入文件失败 {}: {e}", out.display()))
-            })?;
-            std::io::copy(&mut file, &mut of).map_err(|e| {
-                ApiError::internal(format!("解压文件失败 {}: {e}", out.display()))
-            })?;
+            let mut of = std::fs::File::create(&out)
+                .map_err(|e| ApiError::internal(format!("写入文件失败 {}: {e}", out.display())))?;
+            std::io::copy(&mut file, &mut of)
+                .map_err(|e| ApiError::internal(format!("解压文件失败 {}: {e}", out.display())))?;
         }
     }
 

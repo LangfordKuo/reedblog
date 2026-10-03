@@ -168,9 +168,8 @@ pub async fn admin_upload_image(
     check_auth(&state, &headers).await?;
     let max = state.uploads_max_size_bytes();
 
-    let mut mp = multipart.map_err(|_| {
-        ApiError::validation("需要 multipart/form-data，字段 file = 图片文件")
-    })?;
+    let mut mp = multipart
+        .map_err(|_| ApiError::validation("需要 multipart/form-data，字段 file = 图片文件"))?;
     let mut uploaded: Option<(String, Vec<u8>)> = None;
     while let Some(field) = mp
         .next_field()
@@ -184,8 +183,7 @@ pub async fn admin_upload_image(
             break;
         }
     }
-    let (filename, data) =
-        uploaded.ok_or_else(|| ApiError::validation("缺少 file 字段"))?;
+    let (filename, data) = uploaded.ok_or_else(|| ApiError::validation("缺少 file 字段"))?;
 
     // 真实类型按 magic bytes 判定；扩展名/Content-Type 一律不信任
     let kind = detect_image_kind(&data).ok_or_else(invalid_file_type)?;
@@ -220,10 +218,7 @@ pub async fn admin_upload_image(
 }
 
 /// GET /api/uploads/*path → 静态图片（公开；不存在/路径非法一律 404，防目录穿越）
-pub async fn serve_upload(
-    State(state): State<AppState>,
-    Path(rel): Path<String>,
-) -> Response {
+pub async fn serve_upload(State(state): State<AppState>, Path(rel): Path<String>) -> Response {
     if rel.is_empty() {
         return StatusCode::NOT_FOUND.into_response();
     }
@@ -256,10 +251,7 @@ pub async fn serve_upload(
         Ok(body) => (
             [
                 (header::CONTENT_TYPE, themes::mime_for(&rel)),
-                (
-                    header::CACHE_CONTROL,
-                    "public, max-age=31536000, immutable",
-                ),
+                (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
             ],
             body,
         )
@@ -301,19 +293,26 @@ mod tests {
         assert_eq!(detect_image_kind(b""), None);
         assert_eq!(detect_image_kind(b"plain text renamed to .png"), None);
         assert_eq!(
-            detect_image_kind(b"<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>"),
+            detect_image_kind(
+                b"<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>"
+            ),
             None
         );
         assert_eq!(detect_image_kind(b"<?xml version='1.0'?><svg/>"), None);
         // 只有前 7 个字节的伪 PNG 头不放行
-        assert_eq!(detect_image_kind(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a]), None);
+        assert_eq!(
+            detect_image_kind(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a]),
+            None
+        );
     }
 
     #[test]
     fn hash16_is_lowercase_hex() {
         let h = sha256_hex16(b"hello");
         assert_eq!(h.len(), 16);
-        assert!(h.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert!(h
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
         // 同内容同哈希（去重基础）
         assert_eq!(h, sha256_hex16(b"hello"));
         assert_ne!(h, sha256_hex16(b"hello!"));

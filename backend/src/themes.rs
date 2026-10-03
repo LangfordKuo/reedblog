@@ -211,8 +211,8 @@ pub fn active_theme_response(themes_dir: &Path, active_slug: &str) -> Value {
         }
     }
     // 磁盘上没有可用 default（如未安装且未生成）：用内置常量兜底
-    let m: ThemeManifest = toml::from_str(BUILTIN_DEFAULT_THEME_TOML)
-        .expect("内置 default 主题 TOML 必须合法");
+    let m: ThemeManifest =
+        toml::from_str(BUILTIN_DEFAULT_THEME_TOML).expect("内置 default 主题 TOML 必须合法");
     manifest_to_active_json(m, themes_dir, BUILTIN_THEME_SLUG)
 }
 

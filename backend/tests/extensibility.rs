@@ -284,19 +284,26 @@ async fn plugin_lifecycle_hooks_and_injections() {
         &c,
         &format!("{base}/api/admin/plugins"),
         &token,
-        build_zip(&[("no-script/manifest.toml", HELLO_MANIFEST.replace("hello-plugin", "no-script").as_str())]),
+        build_zip(&[(
+            "no-script/manifest.toml",
+            HELLO_MANIFEST.replace("hello-plugin", "no-script").as_str(),
+        )]),
     )
     .await;
     assert_eq!(r.status(), 422);
     assert_eq!(err_code(r).await, "invalid_package");
 
     // 未知钩子 → 422 invalid_manifest
-    let bad_manifest = "name = \"x\"\nslug = \"bad-hooks\"\nversion = \"1.0.0\"\nhooks = [\"post.bogus\"]\n";
+    let bad_manifest =
+        "name = \"x\"\nslug = \"bad-hooks\"\nversion = \"1.0.0\"\nhooks = [\"post.bogus\"]\n";
     let r = upload(
         &c,
         &format!("{base}/api/admin/plugins"),
         &token,
-        build_zip(&[("bad-hooks/manifest.toml", bad_manifest), ("bad-hooks/main.rhai", "// empty")]),
+        build_zip(&[
+            ("bad-hooks/manifest.toml", bad_manifest),
+            ("bad-hooks/main.rhai", "// empty"),
+        ]),
     )
     .await;
     assert_eq!(r.status(), 422);
@@ -372,12 +379,21 @@ async fn plugin_lifecycle_hooks_and_injections() {
         .await
         .unwrap();
     assert!(
-        v["content_md"].as_str().unwrap().contains("BEFORE_RENDER_MARK"),
+        v["content_md"]
+            .as_str()
+            .unwrap()
+            .contains("BEFORE_RENDER_MARK"),
         "before_render 应改写 content_md: {v}"
     );
     let html = v["content_html"].as_str().unwrap();
-    assert!(html.contains("<strong>world</strong>"), "markdown 应被渲染: {html}");
-    assert!(html.contains("AFTER_RENDER_MARK"), "after_render 追加文本应出现在文章 HTML: {html}");
+    assert!(
+        html.contains("<strong>world</strong>"),
+        "markdown 应被渲染: {html}"
+    );
+    assert!(
+        html.contains("AFTER_RENDER_MARK"),
+        "after_render 追加文本应出现在文章 HTML: {html}"
+    );
 
     // after_publish 正常执行后 last_error 保持为空
     let v = c
@@ -443,8 +459,14 @@ async fn plugin_lifecycle_hooks_and_injections() {
         .json::<Value>()
         .await
         .unwrap();
-    assert!(!v["content_html"].as_str().unwrap().contains("AFTER_RENDER_MARK"));
-    assert!(!v["content_md"].as_str().unwrap().contains("BEFORE_RENDER_MARK"));
+    assert!(!v["content_html"]
+        .as_str()
+        .unwrap()
+        .contains("AFTER_RENDER_MARK"));
+    assert!(!v["content_md"]
+        .as_str()
+        .unwrap()
+        .contains("BEFORE_RENDER_MARK"));
 
     // 停用后评论恢复原样
     let r = c
@@ -559,12 +581,24 @@ async fn theme_lifecycle_and_static_serving() {
         "default/theme.toml",
         "name = \"假默认\"\nslug = \"default\"\nversion = \"9.9.9\"\n",
     )]);
-    let r = upload(&c, &format!("{base}/api/admin/themes"), &token, default_overwrite).await;
+    let r = upload(
+        &c,
+        &format!("{base}/api/admin/themes"),
+        &token,
+        default_overwrite,
+    )
+    .await;
     assert_eq!(r.status(), 409);
     assert_eq!(err_code(r).await, "builtin_protected");
 
     // 安装 my-theme → 201
-    let r = upload(&c, &format!("{base}/api/admin/themes"), &token, my_theme_zip()).await;
+    let r = upload(
+        &c,
+        &format!("{base}/api/admin/themes"),
+        &token,
+        my_theme_zip(),
+    )
+    .await;
     let status = r.status();
     let info: Value = r.json().await.unwrap();
     assert_eq!(status, 201, "{info}");
@@ -575,7 +609,13 @@ async fn theme_lifecycle_and_static_serving() {
     assert_eq!(info["has_css"], true);
 
     // 重复安装 → 409 theme_exists
-    let r = upload(&c, &format!("{base}/api/admin/themes"), &token, my_theme_zip()).await;
+    let r = upload(
+        &c,
+        &format!("{base}/api/admin/themes"),
+        &token,
+        my_theme_zip(),
+    )
+    .await;
     assert_eq!(r.status(), 409);
     assert_eq!(err_code(r).await, "theme_exists");
 
@@ -932,7 +972,10 @@ async fn plugin_script_errors_and_restart_restore() {
         .json::<Value>()
         .await
         .unwrap();
-    assert!(v["content_html"].as_str().unwrap().contains("AFTER_RENDER_MARK"));
+    assert!(v["content_html"]
+        .as_str()
+        .unwrap()
+        .contains("AFTER_RENDER_MARK"));
     let v = c
         .get(format!("{base2}/api/frontend/injections"))
         .send()
@@ -959,7 +1002,10 @@ async fn plugin_script_errors_and_restart_restore() {
         .json::<Value>()
         .await
         .unwrap();
-    assert!(!v["content_html"].as_str().unwrap().contains("AFTER_RENDER_MARK"));
+    assert!(!v["content_html"]
+        .as_str()
+        .unwrap()
+        .contains("AFTER_RENDER_MARK"));
 }
 
 // ---------- 4. 未安装门禁白名单（扩展契约第三部分） ----------

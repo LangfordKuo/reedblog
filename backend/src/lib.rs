@@ -80,6 +80,8 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/tags", get(public::list_tags))
         .route("/categories", get(public::list_categories))
         .route("/archive", get(public::archive))
+        // 全文搜索（已安装后公开，无需鉴权）
+        .route("/search", get(public::search_posts))
         // 鉴权
         .route("/auth/login", post(site_auth::login))
         .route("/auth/me", get(site_auth::me))
@@ -110,8 +112,7 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         )
         .route(
             "/admin/tags/{id}",
-            axum::routing::put(admin_terms::admin_update_tag)
-                .delete(admin_terms::admin_delete_tag),
+            axum::routing::put(admin_terms::admin_update_tag).delete(admin_terms::admin_delete_tag),
         )
         // 管理：评论
         .route("/admin/comments", get(admin_comments::admin_list_comments))
@@ -124,8 +125,7 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         // 超限文件由 handler 逐块计数报 422 file_too_large）
         .route(
             "/admin/uploads",
-            post(uploads::admin_upload_image)
-                .layer(DefaultBodyLimit::max(uploads_body_limit)),
+            post(uploads::admin_upload_image).layer(DefaultBodyLimit::max(uploads_body_limit)),
         )
         // 上传文件公开读取（已安装后无需鉴权；不进未安装门禁白名单）
         .route("/uploads/{*path}", get(uploads::serve_upload))
@@ -137,10 +137,7 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/themes/active", get(frontend::themes_active))
         .route("/themes/{slug}/theme.css", get(frontend::theme_css))
         .route("/themes/{slug}/preview.png", get(frontend::theme_preview))
-        .route(
-            "/themes/{slug}/assets/{*path}",
-            get(frontend::theme_asset),
-        )
+        .route("/themes/{slug}/assets/{*path}", get(frontend::theme_asset))
         // 管理：插件
         .route(
             "/admin/plugins",
@@ -234,11 +231,7 @@ pub async fn run(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
             c.server.port,
             c.cors.allowed_origins.clone(),
         ),
-        None => (
-            "127.0.0.1".to_string(),
-            3000,
-            config::default_origins(),
-        ),
+        None => ("127.0.0.1".to_string(), 3000, config::default_origins()),
     };
 
     let state = startup_state(config_path).await;

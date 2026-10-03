@@ -137,13 +137,15 @@ pub async fn install(
     cfg.save(&config_path)?;
 
     // ---- 3. 建表（按 db_type 跑对应迁移）----
-    run_migrations(&req.db_type, &mut probe).await.map_err(|e| {
-        ApiError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "migration_failed",
-            format!("数据库迁移失败: {e}"),
-        )
-    })?;
+    run_migrations(&req.db_type, &mut probe)
+        .await
+        .map_err(|e| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "migration_failed",
+                format!("数据库迁移失败: {e}"),
+            )
+        })?;
 
     // ---- 4. 创建管理员（argon2 哈希）----
     let password_hash = hash_password(&req.admin.password)?;

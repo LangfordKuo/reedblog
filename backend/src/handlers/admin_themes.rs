@@ -11,8 +11,8 @@ use std::path::PathBuf;
 use crate::config::Config;
 use crate::error::{ApiError, ApiResult};
 use crate::packages;
-use crate::themes::{self, ThemeInfo, ThemeManifest, BUILTIN_THEME_SLUG};
 use crate::state::{require_pool, AppState};
+use crate::themes::{self, ThemeInfo, ThemeManifest, BUILTIN_THEME_SLUG};
 
 use super::admin_plugins::read_zip_field;
 use super::helpers::check_auth;

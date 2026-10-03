@@ -115,13 +115,12 @@ pub async fn admin_update_category(
         return Err(e.into());
     }
 
-    let post_count: i64 = sqlx::query(
-        "SELECT COUNT(*) FROM posts WHERE category_id = ? AND status = 'published'",
-    )
-    .bind(id)
-    .fetch_one(&pool)
-    .await?
-    .get(0);
+    let post_count: i64 =
+        sqlx::query("SELECT COUNT(*) FROM posts WHERE category_id = ? AND status = 'published'")
+            .bind(id)
+            .fetch_one(&pool)
+            .await?
+            .get(0);
     Ok(Json(Category {
         id,
         name,
