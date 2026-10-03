@@ -1,6 +1,7 @@
 //! reedblog 后端库入口：路由组装、启动状态恢复、服务运行。
 
 pub mod auth;
+pub mod backup;
 pub mod config;
 pub mod error;
 pub mod handlers;
@@ -33,8 +34,8 @@ use config::Config;
 use error::ApiError;
 use handlers::{
     admin_comments, admin_media, admin_pages, admin_plugins, admin_posts, admin_smtp, admin_terms,
-    admin_themes, feed, frontend, install, public, seo as html_seo, site_auth, site_settings,
-    uploads,
+    admin_themes, backup as admin_backup, feed, frontend, install, public, seo as html_seo,
+    site_auth, site_settings, uploads,
 };
 // handlers::pages 与领域模块 crate::pages 同名，导入时加别名区分
 use handlers::pages as public_pages;
@@ -218,6 +219,15 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
             "/admin/uploads",
             post(uploads::admin_upload_image).layer(DefaultBodyLimit::max(uploads_body_limit)),
         )
+        // 管理：备份与恢复（契约「备份与恢复」条款）：导出 zip 流 / 导入（危险操作，
+        // multipart 需 confirm=REPLACE）+ 请求体上限 1 GiB；info 为内存态最近导出信息
+        .route("/admin/backup/export", get(admin_backup::admin_export_backup))
+        .route(
+            "/admin/backup/import",
+            post(admin_backup::admin_import_backup)
+                .layer(DefaultBodyLimit::max(backup::MAX_IMPORT_BYTES)),
+        )
+        .route("/admin/backup/info", get(admin_backup::admin_backup_info))
         // 管理：媒体库（契约「媒体库」条款；列表惰性扫描历史文件，删除同时删磁盘文件）
         .route("/admin/media", get(admin_media::admin_list_media))
         .route(

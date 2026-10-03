@@ -52,6 +52,8 @@ struct Inner {
     uploads_dir: PathBuf,
     /// 最近一次邮件发送尝试结果（内存态，重启清零；契约「邮件通知-投递语义」）
     mail_last_result: std::sync::Mutex<Option<crate::models::LastSendResult>>,
+    /// 最近一次备份导出的 (exported_at, zip 字节大小)（内存态，重启清零；契约「备份与恢复」）
+    backup_last_export: std::sync::Mutex<Option<(String, u64)>>,
 }
 
 #[derive(Clone)]
@@ -90,6 +92,7 @@ impl AppState {
                 themes_dir,
                 uploads_dir,
                 mail_last_result: std::sync::Mutex::new(None),
+                backup_last_export: std::sync::Mutex::new(None),
             }),
         }
     }
@@ -114,6 +117,22 @@ impl AppState {
             .lock()
             .ok()
             .and_then(|g| g.clone())
+    }
+
+    /// 最近一次备份导出记录（exported_at RFC3339 + zip 字节大小；未导出过为 None）
+    pub fn backup_last_export(&self) -> Option<(String, u64)> {
+        self.inner
+            .backup_last_export
+            .lock()
+            .ok()
+            .and_then(|g| g.clone())
+    }
+
+    /// 记录最近一次备份导出（契约「备份与恢复」；内存态，重启清零）
+    pub fn set_backup_last_export(&self, exported_at: &str, size: u64) {
+        if let Ok(mut guard) = self.inner.backup_last_export.lock() {
+            *guard = Some((exported_at.to_string(), size));
+        }
     }
 
     /// 记录最近一次邮件发送尝试（成功/失败原因摘要；不得含密码）

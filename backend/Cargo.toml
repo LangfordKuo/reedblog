@@ -27,6 +27,7 @@ urlencoding = "2"
 url = "2"
 rhai = { version = "1", features = ["sync"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
+tokio-stream = "0.1"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 sha2 = "0.10"
 lettre = { version = "0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-rustls-tls"] }

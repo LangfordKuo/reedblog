@@ -91,6 +91,12 @@ SmtpSettingsAdmin = {enabled: bool, host, port: int, username, from_name, from_e
                      last_result: {ok: bool, message, at}|null}
                // 2026-10-04 邮件通知新增，见「邮件通知（SMTP）」；
                // last_result 为最近一次实际发送尝试的结果（内存态，重启清零，不落库）
+BackupInfo    = {last_export_at: string|null, total_size_bytes: int|null}
+               // 2026-10-04 备份与恢复新增：最近一次**导出**的时刻与 zip 大小；
+               // 内存态、重启清零，从未导出过时均为 null（见「备份与恢复」）
+BackupImportResult = {ok: true, format_version: int, exported_at: string,
+                      tables: {<表名>: int}, media_files: int}
+               // 2026-10-04 备份与恢复新增：导入成功后回显恢复规模（各表行数 + 媒体文件数）
 ```
 
 ## 安装向导（未初始化时）
@@ -860,6 +866,71 @@ docs/extensibility-contract.md「主题组件」与 docs/theme-development.md「
 - 最近一次发送结果（内存态，重启清零，**不落库**）：`SmtpSettingsAdmin.last_result` =
   `{ok: bool, message, at}|null`；message 为成功回执或失败原因摘要（**不含密码**），
   at 为 RFC3339 UTC；每次实际发送尝试（评论通知与测试邮件）都会更新
+
+## 备份与恢复（2026-10-04 新增；全部需要 Bearer；未登录/token 无效 → 401 `unauthorized`）
+
+一键导出/恢复整个站点的**业务数据**（数据库业务表 + uploads 媒体文件）。导出格式**方言无关**：
+不因 SQLite/MySQL 而异，可跨库恢复（同一 format_version 内）。
+
+### 导出 `GET /api/admin/backup/export`
+
+- → 200，`Content-Type: application/zip`，
+  `Content-Disposition: attachment; filename="reedblog-backup-<yyyyMMddHHmmss>.zip"`（UTC 时间戳）
+- zip 条目（**仅**以下三类，无其他条目）：
+  - `manifest.json`：`{format_version: 1, exported_at: <RFC3339>, db_type: "sqlite"|"mysql",
+    tables: {<表名>: <行数>, …}, media_files: <int>, app_version: <string>}`
+  - `data.json`：`{"<表名>": [<行对象>, …]}`，覆盖全部业务表（清单见下）；
+    **行对象键=列名、值保持原类型**（整型仍是 JSON number、文本仍是 string、NULL 仍是 null），
+    时间戳保持 RFC3339 UTC 文本原样；**主键 id 保留原值**（恢复后关联不断）
+  - `uploads/<相对路径>`：uploads 根目录下的全部普通文件原样复制（保持相对路径；本次
+    改动前遗留的历史文件同样在列；符号链接不导出）
+- 业务表清单（导出与导入的允许集合，显式固定，共 15 张；**建表清单以本表为准**）：
+  `users`、`categories`、`tags`、`posts`、`post_tags`、`comments`、`plugins`、`settings`、
+  `pages`、`page_links`、`theme_settings`、`theme_widgets`、`post_likes`、`media`、
+  `post_revisions`
+  - 注意：**回收站中的文章（posts.deleted_at 非 NULL）与其修订属于数据，照常导出**
+- **不含** `config.toml`：jwt secret、数据库连接、SMTP 密码等配置绝不进备份；
+  活动主题/插件目录/前端产物也不在备份内（只含 DB 中的启用状态行）
+- **`users` 表含管理员 argon2 密码哈希——备份文件请妥善保管**（拿到文件即可离线爆破密码，
+  也可完整还原站点数据）
+- 实现约束：生成过程内存有界（媒体文件逐条、逐块写入 zip，不把 zip 或单个媒体整读进内存）；
+  导出成功后进程内记录 `last_export_at` 与 zip 大小（供 `backup/info`，重启清零）
+
+### 恢复 `POST /api/admin/backup/import`
+
+- multipart/form-data：
+  - `file`：备份 zip（必填）
+  - `confirm`：必须为**字面量** `REPLACE`；缺失或不等于 → 422 `confirmation_required`
+    （**危险操作显式确认**；构造错误不进入 zip 校验，现有数据不动）
+- 成功 → 200 `BackupImportResult`；请求体超 1 GiB → 413
+- **失败语义（先全量校验、后落库）**：以下任一情形 → 422 `invalid_backup`，
+  **现有数据库与 uploads 文件一律不变**：
+  - zip 损坏 / 空 zip / 缺 `manifest.json`；`manifest.format_version` ≠ 1（不兼容）
+  - `data.json` 缺失或形状非法（非对象、表值非数组、行非对象）
+  - 出现允许集合外的表名或 zip 条目（`uploads/` 与上述两个 JSON 之外的条目）
+  - `manifest.tables` 与 `data.json` 的表集合/行数不一致（完整性校验）
+  - 行对象的键与表列不符（缺列/多列）或值类型不符（整型列出现非整数、文本列出现非字符串）
+  - `users` 表缺失或为空（会导致导入后无法登录）
+  - `uploads/` 条目路径非法：经 `sanitize_upload_rel` 清洗，`..`、盘符、绝对路径等一律拒绝，
+    **绝不写出 uploads 根之外**；重复的 uploads 条目同样拒绝（导入前先解到 uploads 根内
+    staging 目录并校验全部条目，条目数与解压总体积设上限防 zip 炸弹）
+- 恢复行为（**单事务**）：
+  1. 校验全过后，在一个事务里按依赖倒序清空 15 张业务表，再按依赖顺序（分类/标签/用户 →
+     文章 → 关联/评论/页面 → 设置/组件 → 点赞/媒体/修订）批量 INSERT 重建 `data.json` 数据；
+     **主键 id 保留原值**；批量语句分批执行，规避双方言占位符数量上限
+  2. 媒体文件：事务提交后，把 staging 中的文件**先写临时再原子替换**到 `uploads/<相对路径>`
+     （覆盖同名文件），再删除 uploads 根下**不在备份内**的文件——磁盘与备份时点完全一致
+     （空目录保留；不触碰 plugins/、themes/ 目录）
+  3. 提交前的任何失败 → 回滚 + 清理 staging，现有数据不变；媒体落盘阶段失败 → 500
+     （此时数据库已是备份状态，可重试导入）
+- **不恢复** `config.toml`：jwt secret 不变 → **导入后原有登录会话继续有效**（除非管理员
+  自行改过 config）；SMTP 密码、数据库配置、活动主题等保持现状；导入完成后按恢复出的
+  `plugins` 表重新同步插件启用状态
+
+### 导出信息 `GET /api/admin/backup/info`
+
+- → 200 `BackupInfo`：`last_export_at` / `total_size_bytes` 为**进程内内存态**最近一次
+  导出记录（重启清零，未导出过为 null）；供后台备份页显示
 
 ## CORS
 - 后端允许来源：`http://localhost:5173`（可在 config.toml `[cors] allowed_origins` 配置，默认含此项）；允许方法 GET/POST/PUT/PATCH/DELETE/OPTIONS（PATCH 为 2026-10-03 页面 toggle 接口新增），允许头 Authorization/Content-Type

@@ -3,6 +3,8 @@ import type {
   ActiveTheme,
   ArchiveMonth,
   AuthResult,
+  BackupImportResult,
+  BackupInfo,
   Category,
   CommentAdmin,
   CommentPub,
@@ -123,6 +125,33 @@ async function requestForm<T>(method: string, path: string, form: FormData): Pro
   }
 
   return toResult<T>(res)
+}
+
+/** 带 Bearer 的文件下载（备份导出等）：返回 Blob 与 Content-Disposition 里的文件名。
+ * 导出接口必须带 Authorization 头，因此不能用 <a href> 直链，只能 fetch → Blob →
+ * 前端触发下载。非 2xx 时复用 toResult 的错误解析（后端仍返回 JSON 错误形状） */
+async function requestBlob(
+  method: string,
+  path: string,
+): Promise<{ blob: Blob; filename: string | null }> {
+  const headers: Record<string, string> = {}
+  const token = getToken()
+  if (token) headers["Authorization"] = `Bearer ${token}`
+
+  let res: Response
+  try {
+    res = await fetch(`/api${path}`, { method, headers })
+  } catch {
+    throw new ApiError(0, "network_error", "无法连接服务器，请确认后端服务已启动")
+  }
+  if (!res.ok) {
+    await toResult<unknown>(res) // 解析错误形状并抛出 ApiError
+    throw new ApiError(res.status, "unknown_error", `请求失败（HTTP ${res.status}）`)
+  }
+
+  const disposition = res.headers.get("Content-Disposition") ?? ""
+  const match = /filename="?([^";]+)"?/.exec(disposition)
+  return { blob: await res.blob(), filename: match ? match[1] : null }
 }
 
 function qs(params: object): string {
@@ -301,6 +330,17 @@ export const api = {
     media: (q: { page?: number; per_page?: number } = {}) =>
       request<Page<MediaItem>>("GET", `/admin/media${qs(q)}`),
     deleteMedia: (id: number) => request<void>("DELETE", `/admin/media/${id}`),
+
+    // 备份与恢复（契约「备份与恢复」条款，2026-10-04 新增）：
+    // 导出走带 Bearer 的 Blob 下载；导入为 multipart（file + confirm=REPLACE，危险操作显式确认）
+    backupInfo: () => request<BackupInfo>("GET", "/admin/backup/info"),
+    exportBackup: () => requestBlob("GET", "/admin/backup/export"),
+    importBackup: (file: File, confirm: string) => {
+      const form = new FormData()
+      form.append("file", file)
+      form.append("confirm", confirm)
+      return requestForm<BackupImportResult>("POST", "/admin/backup/import", form)
+    },
 
     // 站点设置（管理端全字段，含 base_url）
     siteSettings: () => request<SiteSettingsAdmin>("GET", "/admin/site/settings"),

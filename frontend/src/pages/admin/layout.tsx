@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom"
 import {
+  DatabaseBackupIcon,
   ExternalLinkIcon,
   FilesIcon,
   FileTextIcon,
@@ -39,6 +40,7 @@ const navItems = [
   { to: "/admin/themes/settings", label: "主题设置", icon: SlidersHorizontalIcon, end: true },
   { to: "/admin/settings", label: "站点管理", icon: SettingsIcon, end: false },
   { to: "/admin/email", label: "邮件通知", icon: MailIcon, end: true },
+  { to: "/admin/backup", label: "备份", icon: DatabaseBackupIcon, end: true },
 ]
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>

@@ -521,3 +521,19 @@ export interface FrontendInjections {
   head: InjectionFragment[]
   body_end: InjectionFragment[]
 }
+
+/** GET /api/admin/backup/info 响应（契约「备份与恢复」条款，2026-10-04 新增）：
+ * 最近一次导出的时刻与 zip 大小；内存态、重启清零，未导出过为 null */
+export interface BackupInfo {
+  last_export_at: string | null
+  total_size_bytes: number | null
+}
+
+/** POST /api/admin/backup/import 成功响应：回显恢复规模（各表行数 + 媒体文件数） */
+export interface BackupImportResult {
+  ok: true
+  format_version: number
+  exported_at: string
+  tables: Record<string, number>
+  media_files: number
+}

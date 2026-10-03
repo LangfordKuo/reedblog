@@ -1488,6 +1488,7 @@ dependencies = [
  "sqlx",
  "tempfile",
  "tokio",
+ "tokio-stream",
  "toml",
  "tower-http",
  "url",

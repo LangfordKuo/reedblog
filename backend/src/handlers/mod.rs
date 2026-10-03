@@ -6,6 +6,7 @@ pub mod admin_posts;
 pub mod admin_smtp;
 pub mod admin_terms;
 pub mod admin_themes;
+pub mod backup;
 pub mod feed;
 pub mod frontend;
 pub mod helpers;
