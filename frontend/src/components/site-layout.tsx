@@ -4,11 +4,13 @@ import { Outlet } from "react-router-dom"
 import { BlogLeftNav } from "@/components/blog-left-nav"
 import { MinimalHeader } from "@/components/minimal-header"
 import { PluginInjections } from "@/components/plugin-injections"
+import { PostToc } from "@/components/post-toc"
 import { SiteFooter } from "@/components/site-footer"
 import { SiteHeader } from "@/components/site-header"
 import { WidgetRegion } from "@/components/widgets"
 import { useSite } from "@/hooks/use-site"
 import { useThemeSettings } from "@/lib/theme-settings"
+import { shouldRenderToc, useTocHeadings } from "@/lib/toc"
 import type { SiteSettings } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { useRegionWidgets } from "@/lib/widgets"
@@ -71,9 +73,13 @@ function TwoColumnShell({ site }: { site: SiteSettings | null }) {
   )
 }
 
-/** 极简顶栏 + 左中右三列骨架（左栏含导航与 left 组件，右栏为 sidebar/right 降级组件） */
+/** 极简顶栏 + 左中右三列骨架（左栏含导航与 left 组件，右栏为 TOC + sidebar/right 降级组件） */
 function ThreeColumnShell({ site }: { site: SiteSettings | null }) {
-  const hasRight = useRegionWidgets("right").length > 0
+  const hasRightWidgets = useRegionWidgets("right").length > 0
+  // 文章 TOC（详情页固有部件，不走 widgets 配置）：渲染在右栏最上、组件之前；
+  // 详情页写入 store、离开清空，其余页面 hasToc 恒 false 不影响右栏
+  const hasToc = shouldRenderToc(useTocHeadings())
+  const hasRight = hasRightWidgets || hasToc
   return (
     <div className="flex min-h-screen flex-col bg-background">
       <PluginInjections />
@@ -95,7 +101,14 @@ function ThreeColumnShell({ site }: { site: SiteSettings | null }) {
             <Outlet />
           </div>
           {hasRight && (
-            <aside className="lg:sticky lg:top-20 lg:self-start">
+            <aside
+              className={cn(
+                "flex flex-col gap-6 lg:sticky lg:top-20 lg:self-start",
+                // 仅 TOC（无右栏组件）时窄屏不出空壳（PostToc 自身 hidden lg:block）
+                !hasRightWidgets && "hidden lg:flex",
+              )}
+            >
+              <PostToc />
               <WidgetRegion region="right" />
             </aside>
           )}
