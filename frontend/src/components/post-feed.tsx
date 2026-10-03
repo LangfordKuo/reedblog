@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react"
 import { Link, useSearchParams } from "react-router-dom"
-import { CalendarDaysIcon, FolderIcon, MessageSquareIcon, PinIcon } from "lucide-react"
+import { CalendarDaysIcon, EyeIcon, FolderIcon, MessageSquareIcon, PinIcon } from "lucide-react"
 
 import { Pagination } from "@/components/pagination"
 import { BlockSpinner } from "@/components/spinner"
@@ -162,6 +162,11 @@ export function PostCard({ post, titleNode, excerptNode }: PostCardProps) {
         <span className="inline-flex items-center gap-1">
           <MessageSquareIcon className="size-3.5" />
           {post.comment_count} 条评论
+        </span>
+        {/* 浏览量（契约「浏览量与点赞」条款；列表卡眼睛图标） */}
+        <span className="inline-flex items-center gap-1">
+          <EyeIcon className="size-3.5" />
+          {post.view_count} 次浏览
         </span>
         {post.tags.slice(0, 3).map((t) => (
           <Link key={t.id} to={`/tags/${encodeURIComponent(t.name)}`}>

@@ -15,8 +15,9 @@ function runningDays(installedAt: string): number | null {
 }
 
 /**
- * 站点信息卡组件：站点名/描述（/api/site/settings）+ 文章数/评论数/运行天数
- * （/api/site/stats）。title 参数可覆盖卡片标题（默认「站点信息」，留空则不显示标题栏）。
+ * 站点信息卡组件：站点名/描述（/api/site/settings）+ 文章数/评论数/浏览量/运行天数
+ * （/api/site/stats，total_views 为契约「浏览量与点赞」新增）。
+ * title 参数可覆盖卡片标题（默认「站点信息」，留空则不显示标题栏）。
  */
 export function SiteInfoWidget({ widget }: WidgetProps) {
   const title = cfgStr(widget.config, "title", "站点信息")
@@ -47,6 +48,7 @@ export function SiteInfoWidget({ widget }: WidgetProps) {
   if (stats) {
     rows.push(["文章", stats.post_count])
     rows.push(["评论", stats.comment_count])
+    rows.push(["浏览", stats.total_views ?? 0])
   }
   if (days !== null) rows.push(["运行天数", `${days} 天`])
 
@@ -62,7 +64,7 @@ export function SiteInfoWidget({ widget }: WidgetProps) {
           )}
         </div>
         {rows.length > 0 && (
-          <dl className="grid grid-cols-3 gap-2 text-center">
+          <dl className="grid grid-cols-2 gap-2 text-center">
             {rows.map(([label, value]) => (
               <div key={label} className="rounded-md bg-muted/50 px-1 py-2">
                 <dd className="text-sm font-semibold">{value}</dd>

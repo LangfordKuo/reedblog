@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react"
 import { Link, useParams } from "react-router-dom"
-import { ArrowLeftIcon, CalendarDaysIcon, FolderIcon, MessageSquareIcon } from "lucide-react"
+import { ArrowLeftIcon, CalendarDaysIcon, EyeIcon, FolderIcon, MessageSquareIcon } from "lucide-react"
 
 import { CommentSection } from "@/components/comment-section"
+import { LikeButton } from "@/components/like-button"
 import { Markdown } from "@/components/markdown"
 import { BlockSpinner } from "@/components/spinner"
 import { Badge } from "@/components/ui/badge"
@@ -86,10 +87,19 @@ export default function PostDetailPage() {
               <MessageSquareIcon className="size-4" />
               {post.comment_count} 条评论
             </span>
+            {/* 浏览量（契约「浏览量与点赞」条款；本次访问已计入） */}
+            <span className="inline-flex items-center gap-1.5">
+              <EyeIcon className="size-4" />
+              {post.view_count} 次浏览
+            </span>
           </div>
         </header>
         <Separator className="my-6" />
         <Markdown>{post.content_md}</Markdown>
+        {/* 点赞按钮（乐观更新 + 弹跳动画；key 保证切换文章时重挂载取新状态） */}
+        <div className="mt-10 flex justify-center">
+          <LikeButton key={post.slug} slug={post.slug} initialLikes={post.likes} />
+        </div>
         {post.tags.length > 0 && (
           <footer className="mt-8 flex flex-wrap gap-2">
             {post.tags.map((t) => (

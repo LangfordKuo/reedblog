@@ -1,23 +1,26 @@
-//! 站点公开接口：文章列表/详情、评论读写、标签、分类、归档
+//! 站点公开接口：文章列表/详情（含浏览量计数）、点赞、评论读写、标签、分类、归档
 
-use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::extract::{ConnectInfo, Path, Query, State};
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use sqlx::any::AnyRow;
 use sqlx::AnyPool;
 use sqlx::Row;
+use std::net::SocketAddr;
 
 use crate::error::{ApiError, ApiResult, ValidJson};
 use crate::models::{
-    normalize_paging, ArchiveEntry, Category, CategoryRef, CommentPub, CreateCommentRequest, Page,
-    PostDetail, PostPublic, PostsQuery, SearchQuery, SearchResult, Tag,
+    normalize_paging, ArchiveEntry, Category, CategoryRef, CommentPub, CreateCommentRequest,
+    LikeBody, LikeQuery, LikeResult, Page, PostDetail, PostPublic, PostsQuery, SearchQuery,
+    SearchResult, Tag,
 };
 use crate::pages::row_bool;
 use crate::state::{now_rfc3339, require_pool, AppState};
+use crate::views::{client_ip, has_bearer, is_bot_ua};
 
 use super::helpers::{
-    create_comment_pipeline, derive_excerpt, escape_like, fetch_post_tags, make_snippet,
-    md_to_plain_text, render_markdown, row_to_comment_pub, split_search_terms,
+    create_comment_pipeline, derive_excerpt, escape_like, fetch_post_tags, is_unique_violation,
+    make_snippet, md_to_plain_text, render_markdown, row_to_comment_pub, split_search_terms,
     PUBLIC_COMMENT_COLUMNS, PUBLIC_COMMENT_FROM, PUBLIC_COMMENT_THREAD_FILTER, VISIBLE_POST_SQL,
 };
 
@@ -53,6 +56,8 @@ async fn row_to_post_public(pool: &AnyPool, r: &AnyRow) -> ApiResult<PostPublic>
             .unwrap_or_default(),
         comment_count: r.get::<i64, _>("comment_count"),
         is_sticky: row_bool(r, "is_sticky"),
+        view_count: r.try_get::<i64, _>("view_count").unwrap_or(0),
+        likes: r.try_get::<i64, _>("likes").unwrap_or(0),
     })
 }
 
@@ -61,8 +66,11 @@ async fn row_to_post_public(pool: &AnyPool, r: &AnyRow) -> ApiResult<PostPublic>
 // approved、target_type='post'（post_id 列复用为通用目标 id，须防页面留言串号）、
 // 且线程可见（hidden 顶级评论的子回复不计；线程内所有 visible 评论都计数）
 // is_sticky 为置顶标记（契约「文章置顶与定时发布」条款，2026-10-03 新增）
+// view_count / likes（契约「浏览量与点赞」条款）：likes 为 post_likes 子查询计数——
+// 走 (post_id, liker_key) UNIQUE 索引最左前缀，文章量小，双方言性能可接受
 const PUBLIC_POST_COLUMNS: &str = "p.id, p.title, p.slug, p.excerpt, p.content_md, p.category_id, \
-     c.name AS category_name, p.published_at, p.is_sticky, \
+     c.name AS category_name, p.published_at, p.is_sticky, p.view_count, \
+     (SELECT COUNT(*) FROM post_likes l WHERE l.post_id = p.id) AS likes, \
      (SELECT COUNT(*) FROM comments m WHERE m.target_type = 'post' AND m.post_id = p.id \
       AND m.status = 'approved' \
       AND (m.parent_id IS NULL OR EXISTS (SELECT 1 FROM comments mp WHERE mp.id = m.parent_id \
@@ -124,11 +132,12 @@ pub async fn list_posts(
 
     // 排序：recent（默认）按 is_sticky DESC, published_at DESC（置顶在前，契约 2026-10-03
     // 置顶条款；tag/category/year/month 过滤后的标签/分类/归档列表同此规则）；
-    // hot 按 comment_count DESC, published_at DESC（不受置顶影响；comment_count 为
-    // PUBLIC_POST_COLUMNS 中的 SELECT 别名，SQLite/MySQL 均支持按别名排序）
+    // hot 按 view_count DESC, comment_count DESC, published_at DESC（契约「浏览量与点赞」
+    // 条款；不受置顶影响；comment_count 为 PUBLIC_POST_COLUMNS 中的 SELECT 别名，
+    // SQLite/MySQL 均支持按别名排序）
     let order_by = match q.order.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         None | Some("recent") => "p.is_sticky DESC, p.published_at DESC",
-        Some("hot") => "comment_count DESC, p.published_at DESC",
+        Some("hot") => "p.view_count DESC, comment_count DESC, p.published_at DESC",
         Some(other) => {
             return Err(ApiError::validation(format!(
                 "order '{other}' 非法（须为 recent 或 hot）"
@@ -256,13 +265,23 @@ pub async fn search_posts(
 /// GET /api/posts/:slug → PostDetail；不存在/未公开可见（草稿、未到点的 scheduled）
 /// → 404 not_found
 ///
+/// 浏览量计数（契约「浏览量与点赞」条款）：每次公开命中 view_count + 1（自增 SQL
+/// 双方言通用）；带 Bearer 的请求（后台预览）与爬虫 UA 不计数；进程内
+/// (ip, post_id) 60 分钟窗口去重——尽力去重、非精确审计，重启清零。
+/// 计数成功时响应中的 view_count 含本次（内存 +1，避免二次查询）。
+///
 /// 渲染管线（扩展契约「后端钩子」）：
 /// post.before_render 链改写 content_md → Markdown 渲染 → post.after_render 链改写 content_html。
 /// 插件运行时错误自动跳过，不阻断响应。
 pub async fn get_post(
     State(state): State<AppState>,
+    headers: HeaderMap,
+    // 测试路径的裸 axum::serve 不提供 ConnectInfo（rejection → None，走代理头/兜底）；
+    // 生产路径 run() 用 into_make_service_with_connect_info 提供直连地址
+    connect: Result<ConnectInfo<SocketAddr>, axum::extract::rejection::ExtensionRejection>,
     Path(slug): Path<String>,
 ) -> ApiResult<Json<PostDetail>> {
+    let connect = connect.ok();
     let (pool, _db_type) = require_pool(&state).await?;
     let sql = format!(
         "SELECT {PUBLIC_POST_COLUMNS} FROM posts p \
@@ -276,7 +295,23 @@ pub async fn get_post(
         .await?;
     let row = row.ok_or_else(ApiError::not_found)?;
     let content_md = row.get::<String, _>("content_md");
-    let post = row_to_post_public(&pool, &row).await?;
+    let mut post = row_to_post_public(&pool, &row).await?;
+
+    // 计数判定：后台（Bearer）与爬虫不计数；其余按 (ip, post_id) 窗口去重
+    let ua = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !has_bearer(&headers) && !is_bot_ua(ua) {
+        let ip = client_ip(&headers, connect.as_ref());
+        if state.view_dedup().should_count(&ip, post.id) {
+            sqlx::query("UPDATE posts SET view_count = view_count + 1 WHERE id = ?")
+                .bind(post.id)
+                .execute(&pool)
+                .await?;
+            post.view_count += 1;
+        }
+    }
 
     let (render_title, render_md) = state
         .plugins()
@@ -305,6 +340,116 @@ async fn find_published_post(pool: &AnyPool, slug: &str) -> ApiResult<i64> {
         .fetch_optional(pool)
         .await?;
     Ok(row.ok_or_else(ApiError::not_found)?.get::<i64, _>("id"))
+}
+
+// ---------- 点赞（契约「浏览量与点赞」条款） ----------
+
+/// liker_key 长度上限（字符）：前端匿名 id 为 UUID（36 字符），留余量；
+/// 与 MySQL 列宽 VARCHAR(64) 一致
+const LIKER_KEY_MAX_CHARS: usize = 64;
+
+/// liker_key 校验：缺失 / trim 后为空 / 超长 → 422 validation_error
+fn validate_liker_key(raw: Option<String>) -> ApiResult<String> {
+    let key = raw.map(|s| s.trim().to_string()).unwrap_or_default();
+    if key.is_empty() {
+        return Err(ApiError::validation(
+            "liker_key 必填（前端 localStorage 匿名 id）",
+        ));
+    }
+    if key.chars().count() > LIKER_KEY_MAX_CHARS {
+        return Err(ApiError::validation(format!(
+            "liker_key 超长（上限 {LIKER_KEY_MAX_CHARS} 字符）"
+        )));
+    }
+    Ok(key)
+}
+
+/// 点赞总数 + 当前访客是否已赞（三接口共用响应组装）
+async fn like_status(pool: &AnyPool, post_id: i64, liker_key: &str) -> ApiResult<LikeResult> {
+    let likes: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM post_likes WHERE post_id = ?")
+        .bind(post_id)
+        .fetch_one(pool)
+        .await?;
+    let mine: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM post_likes WHERE post_id = ? AND liker_key = ?")
+            .bind(post_id)
+            .bind(liker_key)
+            .fetch_one(pool)
+            .await?;
+    Ok(LikeResult {
+        likes,
+        liked: mine > 0,
+    })
+}
+
+/// GET /api/posts/:slug/like?liker_key= → {likes, liked}（当前访客是否已赞，
+/// 前端进详情页时调用决定按钮初始状态）；文章不可见 → 404；liker_key 非法 → 422
+pub async fn get_like(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+    Query(q): Query<LikeQuery>,
+) -> ApiResult<Json<LikeResult>> {
+    let key = validate_liker_key(q.liker_key)?;
+    let (pool, _db_type) = require_pool(&state).await?;
+    let post_id = find_published_post(&pool, &slug).await?;
+    Ok(Json(like_status(&pool, post_id, &key).await?))
+}
+
+/// POST /api/posts/:slug/like body {liker_key} → 200 {likes, liked: true}。
+/// 重复点赞同 key → 幂等返回当前状态（不报错）：靠 (post_id, liker_key) UNIQUE
+/// 约束，冲突（is_unique_violation 双方言判定）即视为已赞
+pub async fn like_post(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+    body: ValidJson<LikeBody>,
+) -> ApiResult<Json<LikeResult>> {
+    let Json(req) = body.map_err(ApiError::from)?;
+    let key = validate_liker_key(Some(req.liker_key))?;
+    let (pool, _db_type) = require_pool(&state).await?;
+    let post_id = find_published_post(&pool, &slug).await?;
+
+    let insert =
+        sqlx::query("INSERT INTO post_likes (post_id, liker_key, created_at) VALUES (?, ?, ?)")
+            .bind(post_id)
+            .bind(&key)
+            .bind(now_rfc3339())
+            .execute(&pool)
+            .await;
+    if let Err(e) = insert {
+        // UNIQUE 冲突 = 该访客已赞过（并发/重复请求），幂等成功；其余错误上抛
+        if !is_unique_violation(&e) {
+            return Err(e.into());
+        }
+    }
+    Ok(Json(like_status(&pool, post_id, &key).await?))
+}
+
+/// DELETE /api/posts/:slug/like?liker_key=（亦接受 JSON body）→ {likes, liked: false}。
+/// 未点赞过 → 幂等（DELETE 零行不报错，liked=false）
+pub async fn unlike_post(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+    Query(q): Query<LikeQuery>,
+    body: ValidJson<LikeBody>,
+) -> ApiResult<Json<LikeResult>> {
+    // query 优先；body 可选（DELETE 允许空 body，解析失败/缺失时忽略，缺 key 统一 422）
+    let raw = match q.liker_key {
+        Some(k) => Some(k),
+        None => match body {
+            Ok(Json(b)) => Some(b.liker_key),
+            Err(_) => None,
+        },
+    };
+    let key = validate_liker_key(raw)?;
+    let (pool, _db_type) = require_pool(&state).await?;
+    let post_id = find_published_post(&pool, &slug).await?;
+
+    sqlx::query("DELETE FROM post_likes WHERE post_id = ? AND liker_key = ?")
+        .bind(post_id)
+        .bind(&key)
+        .execute(&pool)
+        .await?;
+    Ok(Json(like_status(&pool, post_id, &key).await?))
 }
 
 /// GET /api/posts/:slug/comments → [CommentPub]（仅 approved 且线程可见，时间 ASC, id ASC）

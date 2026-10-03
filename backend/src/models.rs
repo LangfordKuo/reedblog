@@ -29,6 +29,10 @@ pub struct PostPublic {
     pub comment_count: i64,
     /// 是否置顶（契约「文章置顶与定时发布」条款）；前台列表卡显示「置顶」徽章
     pub is_sticky: bool,
+    /// 浏览量（契约「浏览量与点赞」条款）；列表/详情卡片眼睛图标显示
+    pub view_count: i64,
+    /// 点赞总数（post_likes 子查询计数；契约「浏览量与点赞」条款）
+    pub likes: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -67,6 +71,10 @@ pub struct PostAdmin {
     pub published_at: Option<String>,
     /// 是否置顶（契约「文章置顶与定时发布」条款）
     pub is_sticky: bool,
+    /// 浏览量（后台只读展示；契约「浏览量与点赞」条款）
+    pub view_count: i64,
+    /// 点赞总数（后台只读展示，不做管理点赞；契约「浏览量与点赞」条款）
+    pub likes: i64,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -422,6 +430,29 @@ pub struct CommentStatusBody {
     pub status: String,
 }
 
+// ---------- 点赞（契约「浏览量与点赞」条款） ----------
+
+/// 三接口统一响应：{likes: 新总数, liked: 当前访客是否已赞}
+#[derive(Debug, Clone, Serialize)]
+pub struct LikeResult {
+    pub likes: i64,
+    pub liked: bool,
+}
+
+/// POST /api/posts/:slug/like 请求体；liker_key 缺失（字段不存在 → serde 拒绝 → 422）
+/// 或非法长度（trim 后为空 / >64 字符 → handler 校验 422）
+#[derive(Debug, Clone, Deserialize)]
+pub struct LikeBody {
+    pub liker_key: String,
+}
+
+/// GET/DELETE /api/posts/:slug/like 查询参数（DELETE 亦可走 JSON body，见 LikeBody）
+#[derive(Debug, Clone, Deserialize)]
+pub struct LikeQuery {
+    #[serde(default)]
+    pub liker_key: Option<String>,
+}
+
 // ---------- 查询参数 ----------
 
 fn default_page() -> i64 {
@@ -453,8 +484,9 @@ pub struct PostsQuery {
     pub year: Option<i64>,
     #[serde(default)]
     pub month: Option<i64>,
-    /// recent（默认）按 published_at DESC；hot 按 comment_count DESC, published_at DESC
-    /// （热门文章组件数据源）；其他值 → 422 validation_error
+    /// recent（默认）按 is_sticky DESC, published_at DESC；hot 按
+    /// view_count DESC, comment_count DESC, published_at DESC
+    /// （热门文章组件数据源；契约「浏览量与点赞」条款）；其他值 → 422 validation_error
     #[serde(default)]
     pub order: Option<String>,
 }

@@ -14,6 +14,7 @@ pub mod settings;
 pub mod state;
 pub mod theme_settings;
 pub mod themes;
+pub mod views;
 pub mod widgets;
 
 use axum::extract::{DefaultBodyLimit, Request, State};
@@ -21,6 +22,7 @@ use axum::http::{header, HeaderValue, Method};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
+use std::net::SocketAddr;
 use std::path::Path;
 use tower_http::cors::CorsLayer;
 
@@ -88,6 +90,13 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route(
             "/posts/{slug}/comments",
             get(public::list_comments).post(public::create_comment),
+        )
+        // 点赞（公开；不进未安装门禁白名单，未安装 503——契约「浏览量与点赞」条款）
+        .route(
+            "/posts/{slug}/like",
+            get(public::get_like)
+                .post(public::like_post)
+                .delete(public::unlike_post),
         )
         .route("/tags", get(public::list_tags))
         .route("/categories", get(public::list_categories))
@@ -303,6 +312,12 @@ pub async fn run(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     println!("[reedblog] 监听 http://{addr}（配置文件: {config_path}）");
-    axum::serve(listener, app).await?;
+    // ConnectInfo：浏览量去重的直连 IP 兜底来源（无反代头时取 TCP 对端地址；
+    // 测试路径的裸 axum::serve 不提供，handler 侧 Option 兼容）
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }

@@ -44,6 +44,8 @@ struct Inner {
     runtime: RwLock<Runtime>,
     /// 插件宿主（内存注册表 + 插件目录），Clone 共享
     plugins: PluginHost,
+    /// 浏览量去重表（进程内 (ip, post_id) 60 分钟窗口；契约「浏览量与点赞」条款）
+    view_dedup: crate::views::ViewDedup,
     /// 主题存储根目录（active 的权威来源是 config.toml，目录本身启动时解析一次）
     themes_dir: PathBuf,
     /// 图片上传存储根目录（config.toml [uploads] dir，启动时解析一次）
@@ -82,6 +84,7 @@ impl AppState {
                 config_path,
                 runtime: RwLock::new(Runtime::default()),
                 plugins: PluginHost::new(plugins_dir),
+                view_dedup: crate::views::ViewDedup::default(),
                 themes_dir,
                 uploads_dir,
             }),
@@ -94,6 +97,11 @@ impl AppState {
 
     pub fn plugins(&self) -> &PluginHost {
         &self.inner.plugins
+    }
+
+    /// 浏览量去重表（重启清零；尽力去重语义见契约「浏览量与点赞」条款）
+    pub fn view_dedup(&self) -> &crate::views::ViewDedup {
+        &self.inner.view_dedup
     }
 
     pub fn themes_dir(&self) -> &Path {

@@ -15,14 +15,19 @@
 SiteInfo     = {title, subtitle, installed: bool}
 PostPublic   = {id, title, slug, excerpt, category: {id, name}|null,
                 tags: [{id, name}], published_at, comment_count,
-                is_sticky: bool}   // 2026-10-03 置顶新增，见「文章置顶与定时发布」
+                is_sticky: bool,   // 2026-10-03 置顶新增，见「文章置顶与定时发布」
+                view_count: int, likes: int}
+               // 2026-10-04 浏览量与点赞新增：view_count=浏览量（计数与去重策略见
+               // 「浏览量与点赞」）；likes=点赞总数（post_likes 子查询计数）
 PostDetail   = PostPublic + {content_md}
 SearchResult = PostPublic + {snippet}   // snippet 为纯文本上下文片段，见「全文搜索」
 PostAdmin    = {id, title, slug, content_md, excerpt,
                 status: "draft"|"published"|"scheduled",  // scheduled 为 2026-10-03 定时发布新增
                 category_id|null, category_name|null, tag_ids: [int],
                 published_at|null,   // status=scheduled 时即计划发布时间（RFC3339 UTC）
-                is_sticky: bool, created_at, updated_at}
+                is_sticky: bool,
+                view_count: int, likes: int,  // 2026-10-04 新增（后台只读展示）
+                created_at, updated_at}
 Category     = {id, name, post_count}
 Tag          = {id, name, post_count}
 CommentPub   = {id, author_name, content, created_at,
@@ -47,9 +52,12 @@ AuthResult   = {token, username, expires_at}
 UploadResult = {url, size: <字节数>, filename: <原始文件名回显>}
 SiteSettingsPublic = {title, subtitle, description, icp_number, footer_text, per_page: int}
 SiteSettingsAdmin  = SiteSettingsPublic + {base_url}   // base_url 为敏感字段，公开接口不返回
-SiteStats      = {post_count: int, comment_count: int, installed_at: string}
+SiteStats      = {post_count: int, comment_count: int, installed_at: string,
+                  total_views: int}
                // 2026-10-03 组件系统新增：published 文章数 / approved 评论数（含页面留言）/
                // 安装时间（users 表最早 created_at，RFC3339；取不到时为空串）——站点信息组件数据源
+               // 2026-10-04 浏览量新增：total_views = 所有文章 view_count 之和（posts 全表
+               // SUM，含草稿——历史累计口径），见「浏览量与点赞」
 WidgetPosition = "sidebar" | "left" | "right" | "footer"   // 规范位置枚举（校验范围）
 WidgetKind     = "builtin" | "custom"                      // builtin=前端内置 React 组件；custom=HTML 片段
 WidgetSource   = "builtin" | "theme" | "admin"             // 组件来源：内置 / 主题声明 / 后台自建
@@ -82,14 +90,21 @@ WidgetAdmin    = WidgetConfig + {source: WidgetSource, enabled: bool, params: [T
 post_count、站点统计 SiteStats.post_count、归档计数）同口径。详见「文章置顶与定时发布」。
 
 - `GET /api/site` → `SiteInfo`（title/subtitle 与站点设置一致，见「站点设置」）
-- `GET /api/posts?page&per_page&tag=<name>&category=<name>&year=<int>&month=<int>&order=<recent|hot>` → 分页 `[PostPublic]`，仅公开可见（见上）；列表不含 content_md
-  - order（2026-10-03 组件系统新增；2026-10-03 置顶调整）：`recent`（默认，缺省即此）按
-    **is_sticky DESC, published_at DESC**（置顶在前；tag/category/year/month 过滤后的
-    标签/分类/归档列表同此规则）；`hot` 按 comment_count DESC, published_at DESC
-    （热门文章组件数据源，零迁移：comment_count 为既有 SELECT 别名，SQLite/MySQL 均支持
-    按别名排序；**不受置顶影响**）；其他值 → 422 `validation_error`
+- `GET /api/posts?page&per_page&tag=<name>&category=<name>&year=<int>&month=<int>&order=<recent|hot>` → 分页 `[PostPublic]`，仅公开可见（见上）；列表不含 content_md；**列表接口不产生浏览量计数**（见「浏览量与点赞」）
+  - order（2026-10-03 组件系统新增；2026-10-03 置顶调整；2026-10-04 hot 改为浏览量优先）：
+    `recent`（默认，缺省即此）按 **is_sticky DESC, published_at DESC**（置顶在前；
+    tag/category/year/month 过滤后的标签/分类/归档列表同此规则）；`hot` 按
+    **view_count DESC, comment_count DESC, published_at DESC**（热门文章组件数据源；
+    comment_count 为既有 SELECT 别名，SQLite/MySQL 均支持按别名排序；
+    **不受置顶影响**）；其他值 → 422 `validation_error`
 - excerpt 为空时的回退（2026-10-03 定）：由 content_md 生成**纯文本**摘要（剥离 Markdown 语法：标题#、强调符、代码围栏、表格线、链接保留文字），截断至 ≤200 字符；不得返回含 Markdown 符号的原文
 - `GET /api/posts/:slug` → `PostDetail`；不存在/未公开可见（草稿、未到点的 scheduled）→ 404 `not_found`
+  - **浏览量计数点**：每次公开命中 view_count + 1（去重/排除规则见「浏览量与点赞」）；
+    计数成功时响应中的 view_count 已含本次
+- `GET /api/posts/:slug/like?liker_key=` → 200 `{likes: int, liked: bool}`（当前访客是否已赞，
+  前端进详情页时调用决定按钮初始状态；见「浏览量与点赞」）
+- `POST /api/posts/:slug/like` → 200 `{likes: <新总数>, liked: true}`，body `{liker_key}`（见「浏览量与点赞」）
+- `DELETE /api/posts/:slug/like` → 200 `{likes, liked: false}`，liker_key 走 query 或 JSON body（见「浏览量与点赞」）
 - `GET /api/posts/:slug/comments` → `[CommentPub]`（仅 approved 且线程可见，按时间 ASC, id ASC；
   仍为平铺数组，两级树由前端按 parent_id 自行组装，见「评论回复」）
   - 评论目标可见性同文章：文章未公开可见（含未到点的 scheduled）→ 404 `not_found`
@@ -342,7 +357,8 @@ docs/extensibility-contract.md「主题组件」与 docs/theme-development.md「
   前台列表摘要卡对置顶文章显示「置顶」徽章（前端渲染约定）
 - 排序范围：`GET /api/posts` 的 `recent` 序（默认序）改为 **is_sticky DESC, published_at DESC**
   ——tag/category/year/month 过滤（标签页/分类页/归档月份页共用同一接口）同此规则。
-  **不受置顶影响、保持原有排序的**：`order=hot`（comment_count DESC）、`GET /api/search`
+  **不受置顶影响、保持原有排序的**：`order=hot`（view_count DESC, comment_count DESC,
+  published_at DESC——2026-10-04 起浏览量优先，见「浏览量与点赞」）、`GET /api/search`
   （published_at DESC）、RSS 与 sitemap（纯时间序 published_at DESC）
 - 管理端：
   - `PATCH /api/admin/posts/:id/sticky` body `{is_sticky: bool}` → `PostAdmin`（行内快捷切换；
@@ -385,6 +401,60 @@ docs/extensibility-contract.md「主题组件」与 docs/theme-development.md「
   draft→published、scheduled→published 手动切换）时触发；惰性到点可见**不触发**钩子
   （无后台任务），此为惰性方案的固有取舍
 - RSS/sitemap：到点的 scheduled 文章正常进入（可见性条件），排序保持纯时间序不受置顶影响
+
+## 浏览量与点赞（2026-10-04 新增）
+
+### 浏览量（view_count）
+- 存储：`posts` 表新增 `view_count` 整数列（NOT NULL DEFAULT 0；SQLite/MySQL 各一份
+  migration，对已有安装幂等，旧行自动为 0）
+- **计数点：仅公开 `GET /api/posts/:slug`（文章详情）**，每次命中执行
+  `UPDATE posts SET view_count = view_count + 1`（自增写法双方言通用）；
+  列表/搜索/feed/sitemap 等其他接口一律不计数。计数成功时详情响应中的
+  view_count 已含本次
+- 不计数的情形：
+  - 带 Bearer 凭据的请求（后台管理端预览；只认 `Authorization: Bearer <非空>` 头部
+    存在性，不校验 token 有效性）
+  - 爬虫/自动化 UA（常见关键字小写子串匹配：bot、crawl、spider、slurp、curl、wget、
+    python、httpclient、okhttp、headless、scanner、preview、facebookexternalhit、
+    mediapartners、feedfetcher、lighthouse）
+- **去重（尽力而为，非精确审计）**：进程内存表记 `(ip, post_id) → 最近计数时刻`，
+  **60 分钟窗口内同一来源对同一文章只计一次**；内存态、重启清零，不引入 Redis 等
+  外部依赖；表条目达到软上限（50000）时整表清扫过期项
+  - ip 取值优先级：`X-Forwarded-For` 首项 → `X-Real-IP` → TCP 直连地址（生产路径
+    提供 ConnectInfo）→ 兜底 `"direct"`（无任何来源信息时视为同一来源——个人博客
+    反代部署下 XFF 恒在，直连裸奔场景从简合并，符合「尽力去重」定位）
+- 消费点：
+  - `PostPublic`/`PostDetail`/`PostAdmin` 形状新增 `view_count`（前台列表摘要卡与
+    详情页眼睛图标显示；后台只读展示）
+  - `order=hot` 排序改为 **view_count DESC, comment_count DESC, published_at DESC**
+    （热门文章组件数据源；副标题显示浏览数）
+  - `GET /api/site/stats` 新增 `total_views`：所有文章 view_count 之和（posts 全表
+    SUM，含草稿——历史累计口径；站点信息卡显示）
+
+### 点赞（post_likes）
+- 存储：新表 `post_likes`（id、post_id、liker_key、created_at；SQLite/MySQL 各一份
+  migration，时间戳沿用全库 RFC3339 UTC 文本惯例）；**(post_id, liker_key) UNIQUE**
+  （MySQL 用 UNIQUE KEY、SQLite 用 UNIQUE，各自 migration 内合法；该索引最左前缀
+  同时服务按 post_id 的计数子查询）
+- **liker_key = 前端匿名 id**：前端首次生成 UUID 存 localStorage `reedblog_like_id`，
+  点赞三接口都带上；后端只校验「trim 后非空且 ≤64 字符」，不做真伪验证
+  （匿名点赞天然可换浏览器/清存储重刷，定位为轻量互动而非精确民意）
+- 接口（公开、无需鉴权；**不进未安装门禁白名单**，未安装 → 503 `not_installed`）：
+  - `POST /api/posts/:slug/like` body `{liker_key}` → 200 `{likes: <新总数>, liked: true}`；
+    重复点赞同 key → **幂等**返回当前状态（不报错，likes 不涨——UNIQUE 冲突视为已赞）
+  - `DELETE /api/posts/:slug/like`，liker_key 走 query（`?liker_key=`）或 JSON body
+    （query 优先）→ 200 `{likes, liked: false}`；未点赞过 → **幂等**（删除零行不报错）
+  - `GET /api/posts/:slug/like?liker_key=` → 200 `{likes, liked}`（当前访客是否已赞，
+    前端进详情页时调用决定按钮初始状态）
+  - 校验：liker_key 缺失/trim 后为空/超 64 字符 → 422 `validation_error`；
+    文章不存在或未公开可见（草稿、未到点的 scheduled）→ 404 `not_found`（口径同
+    评论目标可见性）
+- 形状：`PostDetail` 与 `PostPublic` 列表都带 `likes`（点赞总数，post_likes 子查询
+  计数——文章量小，双方言性能可接受）；`PostAdmin` 亦含 `view_count`/`likes`
+  （后台列表只读展示，**不做管理点赞**）
+- 删除文章连带删除其 post_likes 行（`DELETE /api/admin/posts/:id` 清理范围扩展）
+- 前端交互约定：详情页点赞按钮（心形图标 + 数字），点击乐观更新 + scale 弹跳动画，
+  已赞态高亮，再点取消；localStorage 记住匿名 id
 
 ## 鉴权
 - `POST /api/auth/login` body `{username, password}` → 200 `AuthResult`；错误 → 401 `invalid_credentials`

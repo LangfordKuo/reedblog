@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react"
 import { Link, useNavigate, useSearchParams } from "react-router-dom"
 import {
+  EyeIcon,
   ExternalLinkIcon,
+  HeartIcon,
   Loader2Icon,
   PencilIcon,
   PinIcon,
@@ -153,6 +155,7 @@ export default function AdminPostsPage() {
                   <TableHead>标题</TableHead>
                   <TableHead>状态</TableHead>
                   <TableHead>分类</TableHead>
+                  <TableHead>浏览 / 点赞</TableHead>
                   <TableHead>更新时间</TableHead>
                   <TableHead className="text-right">操作</TableHead>
                 </TableRow>
@@ -192,6 +195,19 @@ export default function AdminPostsPage() {
                     </TableCell>
                     <TableCell className="text-muted-foreground">
                       {post.category_name ?? "—"}
+                    </TableCell>
+                    {/* 浏览量 / 点赞数（只读展示，契约「浏览量与点赞」条款） */}
+                    <TableCell className="text-muted-foreground">
+                      <span className="inline-flex items-center gap-3 whitespace-nowrap">
+                        <span className="inline-flex items-center gap-1">
+                          <EyeIcon className="size-3.5" />
+                          {post.view_count}
+                        </span>
+                        <span className="inline-flex items-center gap-1">
+                          <HeartIcon className="size-3.5" />
+                          {post.likes}
+                        </span>
+                      </span>
                     </TableCell>
                     <TableCell className="text-muted-foreground">
                       {formatDate(post.updated_at)}

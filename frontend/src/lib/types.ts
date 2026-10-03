@@ -48,6 +48,10 @@ export interface PostPublic {
   comment_count: number
   /** 是否置顶（契约「文章置顶与定时发布」条款）；列表卡显示「置顶」徽章 */
   is_sticky: boolean
+  /** 浏览量（契约「浏览量与点赞」条款）；列表/详情卡眼睛图标显示 */
+  view_count: number
+  /** 点赞总数（契约「浏览量与点赞」条款） */
+  likes: number
 }
 
 export interface PostDetail extends PostPublic {
@@ -77,6 +81,10 @@ export interface PostAdmin {
   published_at: string | null
   /** 是否置顶 */
   is_sticky: boolean
+  /** 浏览量（后台只读展示；契约「浏览量与点赞」条款） */
+  view_count: number
+  /** 点赞总数（后台只读展示，不做管理点赞） */
+  likes: number
   created_at: string
   updated_at: string
 }
@@ -409,6 +417,16 @@ export interface SiteStats {
   post_count: number
   comment_count: number
   installed_at: string
+  /** 所有文章浏览量之和（契约「浏览量与点赞」条款，2026-10-04 新增） */
+  total_views: number
+}
+
+/** 点赞三接口统一响应（GET/POST/DELETE /api/posts/:slug/like） */
+export interface LikeResult {
+  /** 点赞新总数 */
+  likes: number
+  /** 当前访客（liker_key）是否已赞 */
+  liked: boolean
 }
 
 export interface InjectionFragment {

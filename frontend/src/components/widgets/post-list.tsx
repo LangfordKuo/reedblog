@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
-import { FlameIcon, FileTextIcon, MessageSquareIcon } from "lucide-react"
+import { EyeIcon, FlameIcon, FileTextIcon, MessageSquareIcon } from "lucide-react"
 
 import { WidgetEmpty, WidgetShell, cfgInt, cfgStr, type WidgetProps } from "./widget-shell"
 import { api } from "@/lib/api"
@@ -17,11 +17,14 @@ function PostListWidget({
   defaultTitle,
   icon,
   showCommentCount,
+  showViewCount,
 }: WidgetProps & {
   order: "recent" | "hot"
   defaultTitle: string
   icon: React.ReactNode
   showCommentCount?: boolean
+  /** 副标题显示浏览数（契约「浏览量与点赞」：hot-posts 组件消费点） */
+  showViewCount?: boolean
 }) {
   const title = cfgStr(widget.config, "title", defaultTitle) || defaultTitle
   const count = cfgInt(widget.config, "count", 5, 1, 20)
@@ -56,6 +59,12 @@ function PostListWidget({
               </Link>
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <span>{formatDate(p.published_at)}</span>
+                {showViewCount && (
+                  <span className="inline-flex items-center gap-0.5">
+                    <EyeIcon className="size-3" />
+                    {p.view_count}
+                  </span>
+                )}
                 {showCommentCount && (
                   <span className="inline-flex items-center gap-0.5">
                     <MessageSquareIcon className="size-3" />
@@ -83,7 +92,7 @@ export function RecentPostsWidget(props: WidgetProps) {
   )
 }
 
-/** 热门文章（order=hot，按评论数倒序，展示评论数） */
+/** 热门文章（order=hot，按浏览量→评论数倒序；副标题展示浏览数与评论数） */
 export function HotPostsWidget(props: WidgetProps) {
   return (
     <PostListWidget
@@ -91,6 +100,7 @@ export function HotPostsWidget(props: WidgetProps) {
       order="hot"
       defaultTitle="热门文章"
       icon={<FlameIcon />}
+      showViewCount
       showCommentCount
     />
   )

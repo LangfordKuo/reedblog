@@ -10,6 +10,7 @@ import type {
   FrontendInjections,
   InstallPayload,
   Items,
+  LikeResult,
   Page,
   PageAdmin,
   PageDetail,
@@ -135,7 +136,7 @@ export interface PostQuery {
   category?: string
   year?: number
   month?: number
-  /** recent（默认）按发布时间；hot 按评论数（热门文章组件数据源） */
+  /** recent（默认）按置顶+发布时间；hot 按浏览量→评论数（热门文章组件数据源） */
   order?: "recent" | "hot"
 }
 
@@ -173,6 +174,22 @@ export const api = {
   post: (slug: string) => request<PostDetail>("GET", `/posts/${encodeURIComponent(slug)}`),
   comments: (slug: string) =>
     request<CommentPub[]>("GET", `/posts/${encodeURIComponent(slug)}/comments`),
+  // 点赞三接口（契约「浏览量与点赞」条款；liker_key 为 localStorage 匿名 id，
+  // 重复点赞/取消均幂等；DELETE 走 query 传 key——代理兼容性最稳）
+  likeStatus: (slug: string, likerKey: string) =>
+    request<LikeResult>(
+      "GET",
+      `/posts/${encodeURIComponent(slug)}/like${qs({ liker_key: likerKey })}`,
+    ),
+  likePost: (slug: string, likerKey: string) =>
+    request<LikeResult>("POST", `/posts/${encodeURIComponent(slug)}/like`, {
+      liker_key: likerKey,
+    }),
+  unlikePost: (slug: string, likerKey: string) =>
+    request<LikeResult>(
+      "DELETE",
+      `/posts/${encodeURIComponent(slug)}/like${qs({ liker_key: likerKey })}`,
+    ),
   // parent_id：回复的父评论 id（可选；后端做两级归一化，见契约「评论回复」）
   createComment: (
     slug: string,

@@ -17,8 +17,11 @@ use super::helpers::{
     last_insert_id_on, replace_post_tags, slug_taken, slugify, temp_slug,
 };
 
+// view_count / likes（契约「浏览量与点赞」条款）：后台只读展示，不做管理点赞；
+// likes 为 post_likes 子查询计数（走 UNIQUE 索引最左前缀，后台列表分页量小可接受）
 const ADMIN_COLUMNS: &str = "p.id, p.title, p.slug, p.content_md, p.excerpt, p.status, \
-     p.category_id, c.name AS category_name, p.published_at, p.is_sticky, \
+     p.category_id, c.name AS category_name, p.published_at, p.is_sticky, p.view_count, \
+     (SELECT COUNT(*) FROM post_likes l WHERE l.post_id = p.id) AS likes, \
      p.created_at, p.updated_at";
 
 const ADMIN_FROM: &str = "FROM posts p LEFT JOIN categories c ON c.id = p.category_id";
@@ -41,6 +44,8 @@ async fn row_to_post_admin(pool: &AnyPool, r: &AnyRow) -> ApiResult<PostAdmin> {
             .try_get::<Option<String>, _>("published_at")
             .unwrap_or(None),
         is_sticky: row_bool(r, "is_sticky"),
+        view_count: r.try_get::<i64, _>("view_count").unwrap_or(0),
+        likes: r.try_get::<i64, _>("likes").unwrap_or(0),
         created_at: r.get::<String, _>("created_at"),
         updated_at: r.get::<String, _>("updated_at"),
     })
@@ -495,7 +500,7 @@ pub async fn admin_set_sticky(
     Ok(Json(post))
 }
 
-/// DELETE /api/admin/posts/:id → 204（连带清理标签关联与评论）
+/// DELETE /api/admin/posts/:id → 204（连带清理标签关联、评论与点赞）
 pub async fn admin_delete_post(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -517,7 +522,12 @@ pub async fn admin_delete_post(
         .bind(id)
         .execute(&pool)
         .await?;
-    sqlx::query("DELETE FROM comments WHERE post_id = ?")
+    // comments.post_id 为通用目标 id（target_type 区分文章/页面），仅删文章评论行
+    sqlx::query("DELETE FROM comments WHERE target_type = 'post' AND post_id = ?")
+        .bind(id)
+        .execute(&pool)
+        .await?;
+    sqlx::query("DELETE FROM post_likes WHERE post_id = ?")
         .bind(id)
         .execute(&pool)
         .await?;
