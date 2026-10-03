@@ -1,4 +1,5 @@
 pub mod admin_comments;
+pub mod admin_pages;
 pub mod admin_plugins;
 pub mod admin_posts;
 pub mod admin_terms;
@@ -7,6 +8,7 @@ pub mod feed;
 pub mod frontend;
 pub mod helpers;
 pub mod install;
+pub mod pages;
 pub mod public;
 pub mod site_auth;
 pub mod site_settings;

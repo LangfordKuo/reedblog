@@ -471,7 +471,8 @@ async fn feed_limits_to_20_items() {
         .await
         .unwrap();
     assert_eq!(xml.matches("<item>").count(), 20, "feed 只输出最新 20 篇");
-    // sitemap 不受 20 篇限制：21 篇测试文章 + 3 篇安装注入的示例文章全部收录
+    // sitemap 不受 20 篇限制：21 篇测试文章 + 3 篇安装注入的示例文章全部收录；
+    // 页面功能（契约 2026-10-03「页面」条款）后还含 3 个内置 enabled 页面
     let sm = c
         .get(format!("{base}/api/sitemap.xml"))
         .send()
@@ -480,7 +481,7 @@ async fn feed_limits_to_20_items() {
         .text()
         .await
         .unwrap();
-    assert_eq!(sm.matches("<url>").count(), 24 + 4, "{sm}"); // 24 文章 + 首页/tags/categories/archive
+    assert_eq!(sm.matches("<url>").count(), 24 + 3 + 4, "{sm}"); // 24 文章 + 3 内置页 + 首页/tags/categories/archive
 }
 
 // ---------- 4. [server] base_url 优先于请求头 ----------

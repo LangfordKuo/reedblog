@@ -4,8 +4,9 @@ import { MoonIcon, SearchIcon, SunIcon } from "lucide-react"
 
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { api } from "@/lib/api"
 import { isDarkRendered, setColorMode } from "@/lib/color-mode"
-import type { SiteSettings } from "@/lib/types"
+import type { PageSummary, SiteSettings } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
@@ -19,6 +20,24 @@ export function SiteHeader({ site }: { site: SiteSettings | null }) {
   const [searchOpen, setSearchOpen] = useState(false)
   const [keyword, setKeyword] = useState("")
   const [dark, setDark] = useState(isDarkRendered)
+  // 导航页面项（契约「页面」条款：GET /api/pages 仅 enabled，sort_order ASC）；
+  // 加载失败静默降级为「首页 + 固定栏目」
+  const [navPages, setNavPages] = useState<PageSummary[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    api
+      .pages()
+      .then((ps) => {
+        if (!cancelled) setNavPages(ps)
+      })
+      .catch(() => {
+        /* 未安装/网络错误：导航只保留固定项 */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // system 态下系统偏好变化时，color-mode 的单例监听会先改 <html> 的 class，
   // 这里跟随刷新图标（监听注册顺序在 color-mode 之后，读到的是切换后的状态）
@@ -88,6 +107,12 @@ export function SiteHeader({ site }: { site: SiteSettings | null }) {
           <NavLink to="/" end className={navLinkClass}>
             首页
           </NavLink>
+          {/* 启用页面导航项（关于/留言板/友情链接/自定义页） */}
+          {navPages.map((p) => (
+            <NavLink key={p.id} to={`/pages/${encodeURIComponent(p.slug)}`} className={navLinkClass}>
+              {p.title}
+            </NavLink>
+          ))}
           <NavLink to="/archive" className={navLinkClass}>
             归档
           </NavLink>

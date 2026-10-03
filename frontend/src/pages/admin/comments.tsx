@@ -129,7 +129,7 @@ export default function AdminCommentsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>文章</TableHead>
+                  <TableHead>来源</TableHead>
                   <TableHead>作者</TableHead>
                   <TableHead>内容</TableHead>
                   <TableHead>时间</TableHead>
@@ -141,12 +141,29 @@ export default function AdminCommentsPage() {
                 {data?.items.map((c) => (
                   <TableRow key={c.id}>
                     <TableCell className="max-w-40">
-                      <Link
-                        to={`/admin/posts/${c.post_id}/edit`}
-                        className="block truncate underline-offset-4 hover:underline"
-                      >
-                        {c.post_title}
-                      </Link>
+                      {/* 来源（契约「页面」条款）：target_type 区分文章评论 / 页面留言 */}
+                      <div className="flex items-center gap-1.5">
+                        <Badge
+                          variant="outline"
+                          className={
+                            c.target_type === "page"
+                              ? "shrink-0 border-sky-200 bg-sky-50 text-sky-700"
+                              : "shrink-0 text-muted-foreground"
+                          }
+                        >
+                          {c.target_type === "page" ? "页面" : "文章"}
+                        </Badge>
+                        <Link
+                          to={
+                            c.target_type === "page"
+                              ? `/admin/pages/${c.post_id}/edit`
+                              : `/admin/posts/${c.post_id}/edit`
+                          }
+                          className="truncate underline-offset-4 hover:underline"
+                        >
+                          {c.post_title}
+                        </Link>
+                      </div>
                     </TableCell>
                     <TableCell>
                       <div className="font-medium">{c.author_name}</div>

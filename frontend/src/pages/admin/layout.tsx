@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom"
 import {
   ExternalLinkIcon,
+  FilesIcon,
   FileTextIcon,
   FolderIcon,
   LayoutDashboardIcon,
@@ -24,6 +25,7 @@ import { cn } from "@/lib/utils"
 const navItems = [
   { to: "/admin", label: "仪表盘", icon: LayoutDashboardIcon, end: true },
   { to: "/admin/posts", label: "文章管理", icon: FileTextIcon, end: false },
+  { to: "/admin/pages", label: "页面管理", icon: FilesIcon, end: false },
   { to: "/admin/categories", label: "分类管理", icon: FolderIcon, end: false },
   { to: "/admin/tags", label: "标签管理", icon: TagsIcon, end: false },
   { to: "/admin/comments", label: "评论管理", icon: MessageSquareIcon, end: false },

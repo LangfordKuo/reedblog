@@ -7,6 +7,7 @@ pub mod handlers;
 pub mod middleware;
 pub mod models;
 pub mod packages;
+pub mod pages;
 pub mod plugins;
 pub mod seed;
 pub mod settings;
@@ -24,9 +25,11 @@ use tower_http::cors::CorsLayer;
 use config::Config;
 use error::ApiError;
 use handlers::{
-    admin_comments, admin_plugins, admin_posts, admin_terms, admin_themes, feed, frontend, install,
-    public, site_auth, site_settings, uploads,
+    admin_comments, admin_pages, admin_plugins, admin_posts, admin_terms, admin_themes, feed,
+    frontend, install, public, site_auth, site_settings, uploads,
 };
+// handlers::pages 与领域模块 crate::pages 同名，导入时加别名区分
+use handlers::pages as public_pages;
 use state::{connect_pool, AppState};
 
 /// 插件/主题 zip 上传的请求体上限
@@ -56,6 +59,7 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
             Method::GET,
             Method::POST,
             Method::PUT,
+            Method::PATCH,
             Method::DELETE,
             Method::OPTIONS,
         ])
@@ -84,6 +88,13 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/tags", get(public::list_tags))
         .route("/categories", get(public::list_categories))
         .route("/archive", get(public::archive))
+        // 页面（公开；不进未安装门禁白名单，未安装 503）
+        .route("/pages", get(public_pages::list_pages))
+        .route("/pages/{slug}", get(public_pages::get_page))
+        .route(
+            "/pages/{slug}/comments",
+            get(public_pages::list_page_comments).post(public_pages::create_page_comment),
+        )
         // 全文搜索（已安装后公开，无需鉴权）
         .route("/search", get(public::search_posts))
         // 鉴权
@@ -117,6 +128,21 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route(
             "/admin/tags/{id}",
             axum::routing::put(admin_terms::admin_update_tag).delete(admin_terms::admin_delete_tag),
+        )
+        // 管理：页面
+        .route(
+            "/admin/pages",
+            get(admin_pages::admin_list_pages).post(admin_pages::admin_create_page),
+        )
+        .route(
+            "/admin/pages/{id}",
+            get(admin_pages::admin_get_page)
+                .put(admin_pages::admin_update_page)
+                .delete(admin_pages::admin_delete_page),
+        )
+        .route(
+            "/admin/pages/{id}/toggle",
+            axum::routing::patch(admin_pages::admin_toggle_page),
         )
         // 管理：评论
         .route("/admin/comments", get(admin_comments::admin_list_comments))

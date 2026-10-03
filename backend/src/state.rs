@@ -180,6 +180,16 @@ pub async fn connect_pool(db_type: &str, url: &str) -> Result<AnyPool, sqlx::Err
         .await?;
     // 历史数据修复：旧版推导算法（只压平空白、未剥 Markdown）写入的脏 excerpt 按现行规则重写（幂等）
     crate::handlers::helpers::repair_legacy_excerpts(&pool).await?;
+    // 内置页面幂等补齐（契约「页面」条款：启动路径按 slug 补齐缺失的内置页，
+    // 已存在的行绝不覆盖）；失败只记 warning，不阻断启动
+    match pool.acquire().await {
+        Ok(mut conn) => {
+            if let Err(e) = crate::pages::ensure_builtin_pages(db_type, &mut conn).await {
+                eprintln!("[reedblog] warning: 内置页面补齐失败（不影响服务）: {e}");
+            }
+        }
+        Err(e) => eprintln!("[reedblog] warning: 取连接失败，跳过内置页面补齐: {e}"),
+    }
     Ok(pool)
 }
 

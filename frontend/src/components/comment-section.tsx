@@ -14,17 +14,28 @@ import type { CommentPub } from "@/lib/types"
 const AUTHOR_KEY = "reedblog_comment_author"
 const EMAIL_KEY = "reedblog_comment_email"
 
-/** 文章详情页评论区：展示 + 发表表单 */
-export function CommentSection({ slug }: { slug: string }) {
+/**
+ * 评论/留言区：展示 + 发表表单。
+ * target="post"（默认）挂文章评论接口；target="page" 挂留言板页接口
+ * （契约「页面」条款：留言 = 挂在页面上的评论，同一条先发后审管线）。
+ */
+export function CommentSection({
+  slug,
+  target = "post",
+}: {
+  slug: string
+  target?: "post" | "page"
+}) {
   const [comments, setComments] = useState<CommentPub[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const noun = target === "page" ? "留言" : "评论"
 
   useEffect(() => {
     let cancelled = false
     setComments(null)
     setError(null)
-    api
-      .comments(slug)
+    const load = target === "page" ? api.pageComments(slug) : api.comments(slug)
+    load
       .then((c) => {
         if (!cancelled) setComments(c)
       })
@@ -34,19 +45,22 @@ export function CommentSection({ slug }: { slug: string }) {
     return () => {
       cancelled = true
     }
-  }, [slug])
+  }, [slug, target])
 
   return (
     <section className="flex flex-col gap-6">
       <h2 className="text-lg font-semibold">
-        评论{comments ? ` (${comments.length})` : ""}
+        {noun}
+        {comments ? ` (${comments.length})` : ""}
       </h2>
       {error ? (
         <p className="text-sm text-destructive">{error}</p>
       ) : comments === null ? (
-        <BlockSpinner label="加载评论…" />
+        <BlockSpinner label={`加载${noun}…`} />
       ) : comments.length === 0 ? (
-        <p className="text-sm text-muted-foreground">还没有评论，来发表第一条吧！</p>
+        <p className="text-sm text-muted-foreground">
+          还没有{noun}，来发表第一条吧！
+        </p>
       ) : (
         <ul className="flex flex-col gap-5">
           {comments.map((c) => (
@@ -69,12 +83,27 @@ export function CommentSection({ slug }: { slug: string }) {
           ))}
         </ul>
       )}
-      <CommentForm slug={slug} onCreated={(c) => setComments((prev) => [...(prev ?? []), c])} />
+      <CommentForm
+        slug={slug}
+        target={target}
+        noun={noun}
+        onCreated={(c) => setComments((prev) => [...(prev ?? []), c])}
+      />
     </section>
   )
 }
 
-function CommentForm({ slug, onCreated }: { slug: string; onCreated: (c: CommentPub) => void }) {
+function CommentForm({
+  slug,
+  target,
+  noun,
+  onCreated,
+}: {
+  slug: string
+  target: "post" | "page"
+  noun: string
+  onCreated: (c: CommentPub) => void
+}) {
   const [authorName, setAuthorName] = useState(() => localStorage.getItem(AUTHOR_KEY) ?? "")
   const [email, setEmail] = useState(() => localStorage.getItem(EMAIL_KEY) ?? "")
   const [content, setContent] = useState("")
@@ -87,12 +116,13 @@ function CommentForm({ slug, onCreated }: { slug: string; onCreated: (c: Comment
       return
     }
     if (!content.trim()) {
-      toast.error("评论内容不能为空")
+      toast.error(`${noun}内容不能为空`)
       return
     }
     setSubmitting(true)
     try {
-      const created = await api.createComment(slug, {
+      const create = target === "page" ? api.createPageComment : api.createComment
+      const created = await create(slug, {
         author_name: authorName.trim(),
         ...(email.trim() ? { email: email.trim() } : {}),
         content: content.trim(),
@@ -101,7 +131,7 @@ function CommentForm({ slug, onCreated }: { slug: string; onCreated: (c: Comment
       localStorage.setItem(EMAIL_KEY, email.trim())
       setContent("")
       onCreated(created)
-      toast.success("评论发表成功")
+      toast.success(`${noun}发表成功`)
     } catch (err) {
       toast.error(errorMessage(err))
     } finally {
@@ -114,7 +144,7 @@ function CommentForm({ slug, onCreated }: { slug: string; onCreated: (c: Comment
       onSubmit={handleSubmit}
       className="flex flex-col gap-4 rounded-lg border bg-card p-4 sm:p-5"
     >
-      <h3 className="text-sm font-medium">发表评论</h3>
+      <h3 className="text-sm font-medium">发表{noun}</h3>
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="grid gap-1.5">
           <Label htmlFor="comment-author">昵称 *</Label>
@@ -151,7 +181,7 @@ function CommentForm({ slug, onCreated }: { slug: string; onCreated: (c: Comment
       <div>
         <Button type="submit" disabled={submitting}>
           {submitting ? <Loader2Icon className="animate-spin" /> : <SendIcon />}
-          发表评论
+          发表{noun}
         </Button>
       </div>
     </form>

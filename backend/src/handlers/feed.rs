@@ -87,6 +87,11 @@ fn post_url(base: &str, slug: &str) -> String {
     format!("{base}/posts/{}", urlencoding::encode(slug))
 }
 
+/// 页面前台绝对 URL（与前端路由 /pages/:slug 一致；slug 百分号编码）
+fn page_url(base: &str, slug: &str) -> String {
+    format!("{base}/pages/{}", urlencoding::encode(slug))
+}
+
 /// GET /api/feed.xml → RSS 2.0（application/rss+xml; charset=utf-8）
 pub async fn feed_xml(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Response> {
     let (pool, _db_type) = require_pool(&state).await?;
@@ -177,16 +182,29 @@ pub async fn sitemap_xml(State(state): State<AppState>, headers: HeaderMap) -> A
     )
     .fetch_all(&pool)
     .await?;
+    // enabled 页面（契约「页面」条款：sitemap 追加，sort_order ASC 排在文章之后）
+    let page_rows = sqlx::query(
+        "SELECT slug, updated_at FROM pages \
+         WHERE enabled = 1 ORDER BY sort_order ASC, id ASC",
+    )
+    .fetch_all(&pool)
+    .await?;
 
     // (loc, lastmod)；固定页无 lastmod
     let mut urls: Vec<(String, Option<String>)> = vec![(format!("{base}/"), None)];
+    let lastmod_of = |r: &sqlx::any::AnyRow| {
+        r.try_get::<Option<String>, _>("updated_at")
+            .unwrap_or(None)
+            .filter(|s| !s.trim().is_empty())
+    };
     for r in &rows {
         let slug = r.get::<String, _>("slug");
-        let lastmod = r
-            .try_get::<Option<String>, _>("updated_at")
-            .unwrap_or(None)
-            .filter(|s| !s.trim().is_empty());
-        urls.push((post_url(&base, &slug), lastmod));
+        urls.push((post_url(&base, &slug), lastmod_of(r)));
+    }
+    // 文章与页面 slug 各自独立命名空间，分开拼接避免混淆
+    for r in &page_rows {
+        let slug = r.get::<String, _>("slug");
+        urls.push((page_url(&base, &slug), lastmod_of(r)));
     }
     urls.push((format!("{base}/tags"), None));
     urls.push((format!("{base}/categories"), None));
@@ -249,6 +267,18 @@ mod tests {
         assert_eq!(
             post_url("http://x.dev", "你好"),
             "http://x.dev/posts/%E4%BD%A0%E5%A5%BD"
+        );
+    }
+
+    #[test]
+    fn page_url_matches_frontend_route() {
+        assert_eq!(
+            page_url("https://blog.example.com", "guestbook"),
+            "https://blog.example.com/pages/guestbook"
+        );
+        assert_eq!(
+            page_url("http://x.dev", "关于"),
+            "http://x.dev/pages/%E5%85%B3%E4%BA%8E"
         );
     }
 }

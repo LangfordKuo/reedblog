@@ -9,6 +9,8 @@ import AdminCommentsPage from "@/pages/admin/comments"
 import DashboardPage from "@/pages/admin/dashboard"
 import AdminLayout from "@/pages/admin/layout"
 import AdminLoginPage from "@/pages/admin/login"
+import AdminPageEditPage from "@/pages/admin/page-edit"
+import AdminPagesPage from "@/pages/admin/pages"
 import AdminPluginsPage from "@/pages/admin/plugins"
 import AdminPostEditPage from "@/pages/admin/post-edit"
 import AdminPostsPage from "@/pages/admin/posts"
@@ -22,6 +24,7 @@ import CategoryPostsPage from "@/pages/category-posts"
 import HomePage from "@/pages/home"
 import InstallPage from "@/pages/install"
 import NotFoundPage from "@/pages/not-found"
+import PageDetailPage from "@/pages/page-detail"
 import PostDetailPage from "@/pages/post-detail"
 import SearchPage from "@/pages/search"
 import TagIndexPage from "@/pages/tag-index"
@@ -39,6 +42,8 @@ export default function App() {
           <Route element={<SiteLayout />}>
             <Route index element={<HomePage />} />
             <Route path="posts/:slug" element={<PostDetailPage />} />
+            {/* 页面详情（/pages/:slug，与 /posts/:slug 互不冲突；停用页后端 404） */}
+            <Route path="pages/:slug" element={<PageDetailPage />} />
             <Route path="tags" element={<TagIndexPage />} />
             <Route path="tags/:name" element={<TagPostsPage />} />
             <Route path="categories" element={<CategoryIndexPage />} />
@@ -56,6 +61,9 @@ export default function App() {
               <Route path="posts" element={<AdminPostsPage />} />
               <Route path="posts/new" element={<AdminPostEditPage />} />
               <Route path="posts/:id/edit" element={<AdminPostEditPage />} />
+              <Route path="pages" element={<AdminPagesPage />} />
+              <Route path="pages/new" element={<AdminPageEditPage />} />
+              <Route path="pages/:id/edit" element={<AdminPageEditPage />} />
               <Route path="categories" element={<AdminCategoriesPage />} />
               <Route path="tags" element={<AdminTagsPage />} />
               <Route path="comments" element={<AdminCommentsPage />} />

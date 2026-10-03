@@ -90,13 +90,71 @@ pub struct CommentPub {
 #[derive(Debug, Clone, Serialize)]
 pub struct CommentAdmin {
     pub id: i64,
+    /// 目标 id（契约 2026-10-03 页面功能扩展）：target_type='post' 时为文章 id，
+    /// 'page' 时为页面 id（复用 comments.post_id 列，对现有契约破坏最小）
     pub post_id: i64,
+    /// 目标标题（文章标题或页面标题）
     pub post_title: String,
     pub author_name: String,
     pub email: Option<String>,
     pub content: String,
     pub status: String,
     pub created_at: String,
+    /// 评论来源："post"（文章）| "page"（页面留言）
+    pub target_type: String,
+}
+
+// ---------- 页面（契约「页面」条款，2026-10-03 新增） ----------
+
+/// GET /api/pages 单条（公开列表摘要，仅 enabled）
+#[derive(Debug, Clone, Serialize)]
+pub struct PageSummary {
+    pub id: i64,
+    pub title: String,
+    pub slug: String,
+    /// "custom" | "message_board" | "links"（前端据此决定渲染留言表单/链接列表）
+    pub kind: String,
+    pub sort_order: i64,
+}
+
+/// 友情链接单条（kind=links 页面附带；公开与管理端同形状）
+#[derive(Debug, Clone, Serialize)]
+pub struct PageLink {
+    pub id: i64,
+    pub name: String,
+    pub url: String,
+    pub description: String,
+    pub sort_order: i64,
+}
+
+/// GET /api/pages/:slug 响应（content_html 为钩子管线实时渲染产物；
+/// links 仅 kind=links 时非空，其余 kind 恒为 []）
+#[derive(Debug, Clone, Serialize)]
+pub struct PageDetail {
+    pub id: i64,
+    pub title: String,
+    pub slug: String,
+    pub kind: String,
+    pub content_html: String,
+    pub sort_order: i64,
+    pub updated_at: String,
+    pub links: Vec<PageLink>,
+}
+
+/// 管理端页面形状（GET/POST/PUT/PATCH /api/admin/pages* 响应）
+#[derive(Debug, Clone, Serialize)]
+pub struct PageAdmin {
+    pub id: i64,
+    pub title: String,
+    pub slug: String,
+    pub kind: String,
+    pub content_md: String,
+    pub enabled: bool,
+    pub sort_order: i64,
+    pub built_in: bool,
+    pub links: Vec<PageLink>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -289,6 +347,34 @@ impl SiteSettingsBody {
 #[derive(Debug, Clone, Deserialize)]
 pub struct NameBody {
     pub name: String,
+}
+
+/// POST/PUT /api/admin/pages 请求体（POST 必填 title/content_md；PUT 全部可选）。
+/// kind 不可改：请求体不接受该字段（契约「页面」条款）
+#[derive(Debug, Clone, Deserialize)]
+pub struct PageBody {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub slug: Option<String>,
+    #[serde(default)]
+    pub content_md: Option<String>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub sort_order: Option<i64>,
+    /// 全量替换语义（按数组顺序重写 sort_order）；仅 kind=links 页面接受，其余 kind 忽略
+    #[serde(default)]
+    pub links: Option<Vec<PageLinkBody>>,
+}
+
+/// 友情链接单条入参（sort_order 由服务端按数组顺序重写，客户端传值忽略）
+#[derive(Debug, Clone, Deserialize)]
+pub struct PageLinkBody {
+    pub name: String,
+    pub url: String,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

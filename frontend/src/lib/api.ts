@@ -11,6 +11,10 @@ import type {
   InstallPayload,
   Items,
   Page,
+  PageAdmin,
+  PageDetail,
+  PageSaveBody,
+  PageSummary,
   PluginInfo,
   PostAdmin,
   PostDetail,
@@ -163,6 +167,14 @@ export const api = {
   tags: () => request<Tag[]>("GET", "/tags"),
   categories: () => request<Category[]>("GET", "/categories"),
   archive: () => request<ArchiveMonth[]>("GET", "/archive"),
+  // 页面（公开；仅 enabled，sort_order ASC——同时是前台顶栏导航数据源）
+  pages: () => request<PageSummary[]>("GET", "/pages"),
+  page: (slug: string) => request<PageDetail>("GET", `/pages/${encodeURIComponent(slug)}`),
+  // 留言板留言（仅 kind=message_board 的启用页面；复用评论管线，先发后审）
+  pageComments: (slug: string) =>
+    request<CommentPub[]>("GET", `/pages/${encodeURIComponent(slug)}/comments`),
+  createPageComment: (slug: string, body: { author_name: string; email?: string; content: string }) =>
+    request<CommentPub>("POST", `/pages/${encodeURIComponent(slug)}/comments`, body),
   // 全文搜索（已安装后公开；q 为空后端会 400，调用方保证非空）
   search: (q: SearchPostsQuery) => request<Page<SearchResult>>("GET", `/search${qs(q)}`),
 
@@ -195,6 +207,15 @@ export const api = {
     createTag: (name: string) => request<Tag>("POST", "/admin/tags", { name }),
     updateTag: (id: number, name: string) => request<Tag>("PUT", `/admin/tags/${id}`, { name }),
     deleteTag: (id: number) => request<void>("DELETE", `/admin/tags/${id}`),
+
+    // 页面管理（kind 不可改；links 全量替换语义，仅 kind=links 页面生效）
+    pages: () => request<PageAdmin[]>("GET", "/admin/pages"),
+    page: (id: number) => request<PageAdmin>("GET", `/admin/pages/${id}`),
+    createPage: (body: PageSaveBody) => request<PageAdmin>("POST", "/admin/pages", body),
+    updatePage: (id: number, body: PageSaveBody) =>
+      request<PageAdmin>("PUT", `/admin/pages/${id}`, body),
+    togglePage: (id: number) => request<PageAdmin>("PATCH", `/admin/pages/${id}/toggle`),
+    deletePage: (id: number) => request<void>("DELETE", `/admin/pages/${id}`),
 
     comments: (q: AdminCommentQuery = {}) =>
       request<Page<CommentAdmin>>("GET", `/admin/comments${qs(q)}`),

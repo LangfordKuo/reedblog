@@ -96,15 +96,89 @@ export interface CommentPub {
 
 export type CommentStatus = "approved" | "hidden"
 
+/** 评论来源：文章评论 / 页面留言（契约 2026-10-03「页面」条款扩展） */
+export type CommentTargetType = "post" | "page"
+
 export interface CommentAdmin {
   id: number
+  /** 目标 id：target_type=post 时为文章 id，page 时为页面 id */
   post_id: number
+  /** 目标标题（文章标题或页面标题） */
   post_title: string
   author_name: string
   email: string | null
   content: string
   status: CommentStatus
   created_at: string
+  target_type: CommentTargetType
+}
+
+// —— 页面（契约「页面」条款，2026-10-03 新增）——
+
+/** custom=普通页；message_board=留言板（页尾挂留言表单）；links=友情链接（页尾渲染链接卡片） */
+export type PageKind = "custom" | "message_board" | "links"
+
+/** GET /api/pages 单条（公开列表摘要，仅 enabled；前台导航数据源） */
+export interface PageSummary {
+  id: number
+  title: string
+  slug: string
+  kind: PageKind
+  sort_order: number
+}
+
+/** 友情链接单条（kind=links 页面附带） */
+export interface PageLink {
+  id: number
+  name: string
+  url: string
+  description: string
+  sort_order: number
+}
+
+/** GET /api/pages/:slug 响应（content_html 为后端渲染产物） */
+export interface PageDetail {
+  id: number
+  title: string
+  slug: string
+  kind: PageKind
+  content_html: string
+  sort_order: number
+  updated_at: string
+  links: PageLink[]
+}
+
+/** 管理端页面形状（/api/admin/pages* 响应） */
+export interface PageAdmin {
+  id: number
+  title: string
+  slug: string
+  kind: PageKind
+  content_md: string
+  enabled: boolean
+  sort_order: number
+  built_in: boolean
+  links: PageLink[]
+  created_at: string
+  updated_at: string
+}
+
+/** POST/PUT /api/admin/pages 请求体（POST 必填 title/content_md；PUT 全部可选；kind 不可改） */
+export interface PageSaveBody {
+  title?: string
+  slug?: string
+  content_md?: string
+  enabled?: boolean
+  sort_order?: number
+  /** 全量替换语义（数组顺序即排序）；仅 kind=links 页面生效 */
+  links?: PageLinkBody[]
+}
+
+/** 友情链接入参（sort_order 由服务端按数组顺序重写） */
+export interface PageLinkBody {
+  name: string
+  url: string
+  description?: string
 }
 
 export interface AuthResult {

@@ -166,6 +166,12 @@ pub async fn install(
         eprintln!("[reedblog] warning: 示例数据注入失败（不影响安装完成）: {e}");
     }
 
+    // ---- 4.55 注入内置页面（契约「页面」条款：安装时注入关于/留言板/友情链接 3 个
+    //      built_in 页面；失败只记 warning，不阻断安装）----
+    if let Err(e) = crate::pages::ensure_builtin_pages(&req.db_type, &mut probe).await {
+        eprintln!("[reedblog] warning: 内置页面注入失败（不影响安装完成）: {e}");
+    }
+
     // ---- 4.6 写入站点设置默认值（契约「站点设置-默认值」条款：安装时写入；
     //      title/subtitle 取安装请求，base_url 初始值取 config.toml [server] base_url）----
     let defaults = crate::settings::install_defaults(

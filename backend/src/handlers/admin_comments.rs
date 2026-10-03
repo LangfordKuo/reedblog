@@ -11,8 +11,16 @@ use crate::state::{require_pool, AppState};
 
 use super::helpers::check_auth;
 
-const ADMIN_COMMENT_COLUMNS: &str =
-    "c.id, c.post_id, p.title AS post_title, c.author_name, c.email, c.content, c.status, c.created_at";
+// 页面功能扩展（契约「页面」条款）：评论目标可以是文章或页面（target_type 区分）。
+// post_id/post_title 字段名保留、语义扩展为「目标 id / 目标标题」：
+// 来源标题按 target_type 分别 LEFT JOIN posts / pages 后 COALESCE 取之。
+const ADMIN_COMMENT_COLUMNS: &str = "c.id, c.post_id, c.target_type, \
+     COALESCE(p.title, pg.title, '') AS post_title, \
+     c.author_name, c.email, c.content, c.status, c.created_at";
+
+const ADMIN_COMMENT_FROM: &str = "FROM comments c \
+     LEFT JOIN posts p ON p.id = c.post_id AND c.target_type = 'post' \
+     LEFT JOIN pages pg ON pg.id = c.post_id AND c.target_type = 'page'";
 
 fn row_to_comment_admin(r: &sqlx::any::AnyRow) -> CommentAdmin {
     CommentAdmin {
@@ -24,6 +32,9 @@ fn row_to_comment_admin(r: &sqlx::any::AnyRow) -> CommentAdmin {
         content: r.get::<String, _>("content"),
         status: r.get::<String, _>("status"),
         created_at: r.get::<String, _>("created_at"),
+        target_type: r
+            .try_get::<String, _>("target_type")
+            .unwrap_or_else(|_| "post".to_string()),
     }
 }
 
@@ -57,7 +68,8 @@ pub async fn admin_list_comments(
         where_parts.push("c.status = ?");
     }
     if q.post_id.is_some() {
-        where_parts.push("c.post_id = ?");
+        // post_id 过滤仅匹配来源为文章的评论（契约「评论」条款 2026-10-03 扩展）
+        where_parts.push("c.target_type = 'post' AND c.post_id = ?");
     }
     let where_sql = if where_parts.is_empty() {
         String::new()
@@ -65,8 +77,7 @@ pub async fn admin_list_comments(
         format!("WHERE {}", where_parts.join(" AND "))
     };
 
-    let count_sql =
-        format!("SELECT COUNT(*) FROM comments c JOIN posts p ON p.id = c.post_id {where_sql}");
+    let count_sql = format!("SELECT COUNT(*) {ADMIN_COMMENT_FROM} {where_sql}");
     let mut cq = sqlx::query(&count_sql);
     if let Some(s) = &status_param {
         cq = cq.bind(s.clone());
@@ -77,7 +88,7 @@ pub async fn admin_list_comments(
     let total: i64 = cq.fetch_one(&pool).await?.get(0);
 
     let list_sql = format!(
-        "SELECT {ADMIN_COMMENT_COLUMNS} FROM comments c JOIN posts p ON p.id = c.post_id \
+        "SELECT {ADMIN_COMMENT_COLUMNS} {ADMIN_COMMENT_FROM} \
          {where_sql} ORDER BY c.created_at DESC LIMIT ? OFFSET ?"
     );
     let mut lq = sqlx::query(&list_sql);
@@ -125,10 +136,7 @@ pub async fn admin_update_comment(
         return Err(ApiError::not_found());
     }
 
-    let sql = format!(
-        "SELECT {ADMIN_COMMENT_COLUMNS} FROM comments c JOIN posts p ON p.id = c.post_id \
-         WHERE c.id = ?"
-    );
+    let sql = format!("SELECT {ADMIN_COMMENT_COLUMNS} {ADMIN_COMMENT_FROM} WHERE c.id = ?");
     let row = sqlx::query(&sql).bind(id).fetch_one(&pool).await?;
     Ok(Json(row_to_comment_admin(&row)))
 }
