@@ -17,6 +17,13 @@ docker run -d --name reedblog -p 8080:80 -v reedblog-data:/data \
 数据全在 `reedblog-data` 卷里（`config.toml`、SQLite、`uploads/`、`plugins/`、`themes/`），删容器不丢；
 升级时 `docker pull` 后删旧容器、用同一条命令带同一卷重跑。
 
+**国内服务器拉不动 `ghcr.io`？** 把镜像前缀 `ghcr.io/` 换成加速地址 `ghcr.1ms.run/` 即可（第三方公共服务，非本项目提供，可用性与凭据安全请自行确认；实测三个镜像均可经它匿名拉取）：
+
+```bash
+docker pull ghcr.1ms.run/langfordkuo/reedblog:latest
+docker tag  ghcr.1ms.run/langfordkuo/reedblog:latest ghcr.io/langfordkuo/reedblog:latest  # 需要保留原镜像名时（例如给 compose 用）
+```
+
 > 该镜像内 Nginx 以 root 运行（需要绑定 80 端口）。要进程隔离与后端非 root（uid 10002）请用下面的方案。
 
 其他部署方式：

@@ -17,6 +17,13 @@ Open **http://localhost:8080** → your first visit goes into the `/install` wiz
 All data lives in the `reedblog-data` volume (`config.toml`, SQLite, `uploads/`, `plugins/`, `themes/`), so removing the
 container loses nothing; to upgrade, `docker pull`, remove the old container and re-run the same command with the same volume.
 
+**Behind a slow/blocked network in mainland China?** Replace the `ghcr.io/` prefix with the mirror `ghcr.1ms.run/` (a third-party public service, not provided by this project — verify availability and credential safety yourself; all three images were verified pullable through it anonymously):
+
+```bash
+docker pull ghcr.1ms.run/langfordkuo/reedblog:latest
+docker tag  ghcr.1ms.run/langfordkuo/reedblog:latest ghcr.io/langfordkuo/reedblog:latest  # keep the original name (e.g. for compose)
+```
+
 > Inside this image Nginx runs as root (it must bind port 80). For process isolation with a non-root backend (uid 10002), use the options below.
 
 Other deployment options:

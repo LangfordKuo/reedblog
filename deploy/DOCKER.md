@@ -313,3 +313,33 @@ docker buildx build --platform linux/amd64,linux/arm64 \
   -f deploy/docker/Dockerfile.allinone \
   -t ghcr.io/langfordkuo/reedblog:dev --push .
 ```
+
+## 11. 国内网络：ghcr.io 镜像加速
+
+国内机器拉 `ghcr.io` 可能超时。可用第三方加速地址 **`ghcr.1ms.run`**：把镜像前缀 `ghcr.io/` 换成
+`ghcr.1ms.run/` 即可（**该服务非本项目提供**，可用性与凭据安全请自行判断，不建议生产环境长期依赖单一加速站）。
+
+**a) 直接拉（docker run）**
+
+```bash
+docker pull ghcr.1ms.run/langfordkuo/reedblog:latest
+docker run -d --name reedblog -p 8080:80 -v reedblog-data:/data \
+  --restart unless-stopped ghcr.1ms.run/langfordkuo/reedblog:latest
+```
+
+需保留原镜像名时（例如后续要给 compose / 已有脚本用）加一步改名：
+
+```bash
+docker tag ghcr.1ms.run/langfordkuo/reedblog:latest ghcr.io/langfordkuo/reedblog:latest
+```
+
+**b) compose**：`docker-compose.yml` 里的 `image:` 是 `ghcr.io/...`，两种做法——
+
+- 按上面 `docker pull` + `docker tag` 把原名镜像拉到本地，再 `docker compose up -d`（不再联网拉）；
+- 或临时把 compose 里三处 `image: ghcr.io/` 改成 `image: ghcr.1ms.run/`（仅本机生效，别提交回仓库）。
+
+**c) 三个镜像都适用**：`reedblog`（一体化）、`reedblog-backend`、`reedblog-web`，tag 规则与 ghcr.io 一致。
+
+**已验证**：在匿名前提下（不带任何凭据）从加速站拉取三个镜像的 `latest` 与 `v0.3.0` manifest 均返回 200，
+且返回的是**同一个多架构清单**（`linux/amd64` + `linux/arm64`），与直连 ghcr.io 的内容一致。
+加速站走自己的 token 端点（`/openapi/v1/auth/token`），`docker pull` 会自动处理，无需手工配置。
