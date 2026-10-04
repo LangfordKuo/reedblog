@@ -959,7 +959,9 @@ async fn plugin_script_errors_and_restart_restore() {
     assert!(v.get("last_error").is_none() || v["last_error"].is_null());
 
     // ---- 模拟重启：startup_state 按 DB 恢复 enabled ----
-    let state2 = reedblog_backend::startup_state(cfg_str).await;
+    let state2 = reedblog_backend::startup_state(cfg_str)
+        .await
+        .expect("重启恢复（config 已安装 + 库可连）必须成功");
     assert!(state2.is_installed().await);
     let app2 = reedblog_backend::build_router(state2, vec!["http://localhost:5173".to_string()]);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

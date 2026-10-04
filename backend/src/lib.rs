@@ -330,13 +330,17 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
 
 /// 启动时恢复状态：config.toml 可完整加载（含非空 jwt_secret）且数据库可连 → 已安装。
 /// 无论是否已安装都补建内置 default 主题（幂等）；已安装则按 DB 恢复插件 enabled 状态。
-pub async fn startup_state(config_path: &str) -> AppState {
+///
+/// 返回 Err 的唯一情形：config.toml 标记已安装（jwt_secret 非空）但数据库连接/迁移失败。
+/// 此时调用方必须让进程非零退出、绝不启动 HTTP 服务——站点若落到未安装态，管理员可能
+/// 误走安装向导覆盖已有数据（错误日志已写明原因与处置建议）。
+pub async fn startup_state(config_path: &str) -> Result<AppState, String> {
     let state = AppState::new(config_path);
     // 首次运行/升级启动：themes/default 不存在时自动生成内置主题
     themes::ensure_default_theme(state.themes_dir());
     if let Some(cfg) = Config::load(Path::new(config_path)) {
         if cfg.auth.jwt_secret.is_empty() {
-            return state;
+            return Ok(state);
         }
         match cfg.db_url() {
             Some(url) => match connect_pool(&cfg.database.db_type, &url).await {
@@ -355,15 +359,28 @@ pub async fn startup_state(config_path: &str) -> AppState {
                 }
                 Err(e) => {
                     eprintln!(
-                        "[reedblog] config.toml 标记已安装，但数据库连接/迁移失败: {e}；\
-                         以未安装状态启动"
+                        "[reedblog] ============================================================\n\
+                         [reedblog] 拒绝启动：config.toml 标记已安装（jwt_secret 非空），但数据库连接/迁移失败\n\
+                         [reedblog] 原始错误: {e}\n\
+                         [reedblog] ------------------------------------------------------------\n\
+                         [reedblog] 为避免误安装覆盖数据，已拒绝启动：不会进入安装向导，也不会监听 HTTP 端口。\n\
+                         [reedblog] 请排查后再启动：\n\
+                         [reedblog]   1) 数据库是否可访问（SQLite 文件路径/权限，或 MySQL 连接信息）；\n\
+                         [reedblog]   2) 数据库与二进制版本是否匹配——已应用的迁移文件不可修改，\n\
+                         [reedblog]      新的变更请另建迁移文件；\n\
+                         [reedblog]   3) 处理前先备份数据库与上传目录（uploads/）。\n\
+                         [reedblog] ============================================================"
+                    );
+                    return Err(
+                        "config.toml 标记已安装但数据库连接/迁移失败，已拒绝启动（详见上方日志）"
+                            .to_string(),
                     );
                 }
             },
             None => eprintln!("[reedblog] config.toml 中 db_type 无效，以未安装状态启动"),
         }
     }
-    state
+    Ok(state)
 }
 
 /// 运行 HTTP 服务（默认 127.0.0.1:3000，config.toml [server] 可改）
@@ -378,7 +395,9 @@ pub async fn run(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
         None => ("127.0.0.1".to_string(), 3000, config::default_origins()),
     };
 
-    let state = startup_state(config_path).await;
+    // Err = config 标记已安装但数据库不可用：直接向上传播（main.rs 以非零码退出），
+    // 不建路由、不监听端口——绝不落入未安装态
+    let state = startup_state(config_path).await?;
     let app = build_router(state, origins);
 
     let addr = format!("{host}:{port}");

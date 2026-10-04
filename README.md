@@ -80,6 +80,8 @@ cd frontend && npm ci && npm run build   # → frontend/dist/
 
 `dist/` 交给 Nginx 托管（SPA fallback 到 `index.html`），`/api` 反代到后端；后端保持监听 `127.0.0.1:3000`（同源反代无需改 `[cors]`）。完整片段（含 SEO 爬虫分流）见 [`deploy/nginx.conf.example`](deploy/nginx.conf.example)，可执行包的三步部署见 [`deploy/QUICKSTART.md`](deploy/QUICKSTART.md)。建议用 systemd 托管后端并固定工作目录（`config.toml`、`plugins/`、`themes/`、SQLite 都相对它解析），首次部署走 `/install`。
 
+配置已标记安装（`[auth] jwt_secret` 非空）但数据库连接或迁移失败时，后端会**拒绝启动（非零退出码）**并打印醒目错误日志，而不是进入安装向导——避免管理员误走 `/install` 覆盖已有数据；升级前请先备份数据库与 `uploads/` 上传目录。
+
 ## 配置
 
 `config.toml` 默认位于运行目录，可用环境变量 `REEDBLOG_CONFIG` 指定路径（安装向导会把配置写回该文件）。

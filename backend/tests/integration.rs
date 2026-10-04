@@ -984,7 +984,9 @@ async fn startup_restores_installed_state() {
     assert_eq!(r.status(), 201);
 
     // 实例 2：模拟进程重启（同一 config.toml，走 startup_state 恢复）
-    let state2 = reedblog_backend::startup_state(cfg_str).await;
+    let state2 = reedblog_backend::startup_state(cfg_str)
+        .await
+        .expect("重启恢复（config 已安装 + 库可连）必须成功");
     assert!(state2.is_installed().await);
     let app2 = reedblog_backend::build_router(state2, vec!["http://localhost:5173".to_string()]);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1241,7 +1243,9 @@ async fn install_seeds_sample_content() {
     assert_eq!(v["total"], 3);
 
     // 正常启动路径绝不重复注入：模拟重启（startup_state 恢复），示例数据数量不变
-    let state2 = reedblog_backend::startup_state(cfg_str).await;
+    let state2 = reedblog_backend::startup_state(cfg_str)
+        .await
+        .expect("重启恢复（config 已安装 + 库可连）必须成功");
     assert!(state2.is_installed().await);
     let app2 = reedblog_backend::build_router(state2, vec!["http://localhost:5173".to_string()]);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

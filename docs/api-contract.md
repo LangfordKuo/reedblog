@@ -122,6 +122,7 @@ BackupImportResult = {ok: true, format_version: int, exported_at: string,
   - **安装完成时自动注入 3 个内置页面**（2026-10-03 定，见「页面」）：关于（/about，icon=info）、留言板（/guestbook，kind=message_board，icon=message-square）、友情链接（/links，kind=links，icon=link）。内置页面属功能性数据而非示例内容：**安装路径与正常启动路径都会按 slug 幂等补齐**（已存在的行绝不覆盖，管理员的编辑/停用不受影响；老库的已有行 icon 留在 `''`，由前端默认图标兜底）；注入失败只记 warning 日志
   - 已安装后再调 → 409 `{"error":{"code":"already_installed",...}}`
 - **未安装状态下**，除 `/api/health`、`/api/install/status`、`POST /api/install` 外的所有 `/api/*` 返回 503 `{"error":{"code":"not_installed",...}}`
+- **启动语义（2026-10-04 定）**：`config.toml` 可完整加载且 `[auth] jwt_secret` 非空即视为已安装。此时若数据库连接或迁移失败（已应用的迁移文件被修改、库与二进制版本不匹配、库文件损坏/不可访问等），后端**拒绝启动**（醒目多行日志写明原因与处置建议，进程非零退出），绝不回退为未安装态、不启动 HTTP 服务——避免管理员误走安装向导覆盖已有数据；仅 `config.toml` 读不到或 `jwt_secret` 为空才以未安装态启动、放行安装向导。安装接口内部（`POST /api/install`）的连接/迁移失败不受此影响，仍按本节返回错误响应给向导，不退出进程
 - 安装完成无需重启进程（进程内切换到已初始化状态即可；实现上允许重启，但接口行为必须一致）
 
 ## 站点公开接口（已安装后可用）

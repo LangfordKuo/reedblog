@@ -155,6 +155,7 @@ docker compose up -d         # 重建容器，数据卷不动
 ```
 
 - 数据库迁移在后端启动时自动执行，升级无需手工操作。
+- **迁移失败即拒绝启动**：config 已标记安装但数据库连接/迁移失败（如已应用的迁移文件被改动、库与二进制版本不匹配）时，后端以非零退出码退出并打印醒目错误日志，**不会**进入安装向导（避免误安装覆盖数据）。容器加了 `--restart` 时表现为反复重启，请用 `docker logs` / `docker compose logs` 看日志排错；**升级前请先备份数据库与上传目录**。
 - 想固定版本：把 `docker-compose.yml` 里的 `image:` 改成 `ghcr.io/langfordkuo/reedblog-backend:X.Y`。
 - 用本地源码构建则用 `docker compose up -d --build`（会先 git pull）。
 - 一体化镜像（第 4.1 节）升级：`docker pull ghcr.io/langfordkuo/reedblog:latest` 后删旧容器、
