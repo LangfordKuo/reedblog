@@ -1,13 +1,16 @@
 # Docker 部署 reedblog
 
-两个镜像 + `docker-compose.yml` 编排：
+三个镜像 + `docker-compose.yml` 编排：
 
 | 镜像 | 内容 | 镜像内端口 |
 |---|---|---|
+| `ghcr.io/langfordkuo/reedblog` | **一体化**：Nginx（前端 + `/api` 反代 + UA 爬虫分流）+ 后端进程，同容器运行（容器内 root） | 80 |
 | `ghcr.io/langfordkuo/reedblog-backend` | 后端进程（Rust/Axum），非 root（uid 10002）运行 | 3000 |
 | `ghcr.io/langfordkuo/reedblog-web` | Nginx + 前端构建产物（含 `/api` 反代与 UA 爬虫分流） | 80 |
 
-数据全部落在 `backend` 容器的 `/data` 卷：`config.toml`、SQLite 文件、`uploads/`、`plugins/`、`themes/`。
+数据全部落在 `/data` 卷：`config.toml`、SQLite 文件、`uploads/`、`plugins/`、`themes/`。
+一体化镜像与 backend 镜像共用同一份入口逻辑（`deploy/docker/entrypoint-lib.sh`：数据目录检查 +
+未安装态配置生成），行为一致。
 
 ---
 
@@ -81,19 +84,65 @@ docker compose --profile mysql up -d --build
 
 ## 4. 直接拉 GHCR 镜像跑（不用 compose）
 
+### 4.1 一体化镜像：一条命令跑整套
+
+Nginx（前端 + `/api` 反代 + UA 分流）与后端在同一个容器里，最省事：
+
 ```bash
-# 后端（数据卷、端口 3000）
-docker run -d --name reedblog-backend \
-  -p 3000:3000 -v reedblog-data:/data \
-  --restart unless-stopped \
+docker run -d --name reedblog -p 8080:80 -v reedblog-data:/data \
+  --restart unless-stopped ghcr.io/langfordkuo/reedblog:latest
+```
+
+打开 **http://localhost:8080** → 首次访问进入 `/install` 安装向导。升级：
+
+```bash
+docker pull ghcr.io/langfordkuo/reedblog:latest
+docker rm -f reedblog && docker run -d --name reedblog -p 8080:80 -v reedblog-data:/data \
+  --restart unless-stopped ghcr.io/langfordkuo/reedblog:latest     # 数据卷不变
+```
+
+**与 compose 方案（两个镜像）的取舍**：
+
+| | 一体化 `reedblog` | compose 的 backend + web |
+|---|---|---|
+| 启动 | 一条 `docker run` | `docker compose up -d` |
+| 运行身份 | nginx 与后端同容器，**容器内 root**（nginx 要绑 80、写 `/var/cache/nginx` 与 `/var/run`） | 两个容器各自隔离，后端非 root（uid 10002） |
+| 前后端独立升级 / 扩缩副本 | 不行，整体升级 | 可以，还能换成外部 MySQL / 独立反代 |
+| 数据卷 | `-v <卷>:/data` | 同一个卷挂到 backend 容器 |
+| 端口 | 宿主机 → 容器 `80` | 宿主机 → web 容器 `80`（backend 只在 compose 网络内） |
+| 适合 | 先跑起来、单机小站、演示 | 长期生产、要隔离、要扩展 |
+
+一体化镜像的运行约定与 backend 镜像一致：`/data` 卷、`REEDBLOG_CONFIG=/data/config.toml`、
+未安装态 503 也算健康、环境变量（`REEDBLOG_PORT`/`REEDBLOG_DB_TYPE`/…）只在首次生成
+`config.toml` 时生效、绝不覆盖已有配置。差异只有两点：
+
+- **root 运行**（原因见上表）。也因此它写入 `/data` 的文件属主是 root；若之后换用 compose 的
+  非 root 后端，先修正属主：绑定挂载用 `sudo chown -R 10002:10002 <宿主机目录>`，
+  命名卷可临时起容器执行同样命令。
+- `BACKEND_UPSTREAM` 在镜像里默认 **`127.0.0.1:3000`**（nginx 与后端同机）；改 `REEDBLOG_PORT`
+  时必须同步改它，否则 nginx 反代不到后端（入口检测到两者不一致会在日志里打印警告）。
+
+### 4.2 分开跑：后端 + Web 两个镜像
+
+```bash
+# 网络 + 数据卷
+docker network create reedblog
+docker volume create reedblog-data
+
+# 后端（数据卷、仅在容器网络内提供服务）
+docker run -d --name reedblog-backend --network reedblog --network-alias backend \
+  -v reedblog-data:/data --restart unless-stopped \
   ghcr.io/langfordkuo/reedblog-backend:latest
 
-# Web（同机时用 host.docker.internal 指向宿主机后端；Linux 可加 --add-host host.docker.internal:host-gateway）
-docker run -d --name reedblog-web \
-  -p 8080:80 -e BACKEND_UPSTREAM=host.docker.internal:3000 \
-  --restart unless-stopped \
+# Web（BACKEND_UPSTREAM 指向后端容器名）
+docker run -d --name reedblog-web --network reedblog -p 8080:80 \
+  -e BACKEND_UPSTREAM=backend:3000 --restart unless-stopped \
   ghcr.io/langfordkuo/reedblog-web:latest
 ```
+
+打开 http://localhost:8080 → 首次访问进入 `/install` 安装向导。
+不用自定义网络时，也可以让后端发布到宿主机、web 用
+`-e BACKEND_UPSTREAM=host.docker.internal:3000` 指过来（Linux 需加 `--add-host host.docker.internal:host-gateway`）。
 
 > `BACKEND_UPSTREAM` 是 `host:port`，**不带 `http://` 前缀**（模板里拼成 `http://$BACKEND_UPSTREAM`）。
 > 只跑后端镜像时，浏览器拿到的是 API 响应，没有前端页面——正常，前端在 web 镜像里。
@@ -108,8 +157,10 @@ docker compose up -d         # 重建容器，数据卷不动
 - 数据库迁移在后端启动时自动执行，升级无需手工操作。
 - 想固定版本：把 `docker-compose.yml` 里的 `image:` 改成 `ghcr.io/langfordkuo/reedblog-backend:X.Y`。
 - 用本地源码构建则用 `docker compose up -d --build`（会先 git pull）。
+- 一体化镜像（第 4.1 节）升级：`docker pull ghcr.io/langfordkuo/reedblog:latest` 后删旧容器、
+  用同一条 `docker run` 带同一数据卷重跑；升级前后端一起换，不能只换其中一个。
 
-## 6. 环境变量（backend 容器）
+## 6. 环境变量（backend / 一体化容器）
 
 入口脚本 `deploy/docker/entrypoint.sh` 在 `/data/config.toml` **不存在**时按这些变量生成未安装态配置；
 已存在则原样使用，变量只在日志里提示。
@@ -127,21 +178,37 @@ docker compose up -d         # 重建容器，数据卷不动
 | `REEDBLOG_MYSQL_DATABASE` | `reedblog` | MySQL 库名 |
 | `REEDBLOG_CORS_ORIGINS` | 空 | 跨域白名单，逗号分隔（同源反代不需要） |
 
+一体化镜像（第 4.1 节）读同一组 `REEDBLOG_*` 变量——入口逻辑与 backend 镜像共用
+`deploy/docker/entrypoint-lib.sh`，语义完全一致；额外有一个 `BACKEND_UPSTREAM`
+（Nginx 反代目标，镜像默认 `127.0.0.1:3000`，即同容器后端）。
+
 web 容器：`BACKEND_UPSTREAM`（默认 `backend:3000`）。SMTP 密码沿用后端既有约定
 `REEDBLOG_SMTP_PASSWORD`，需要时自行 `docker compose` 追加环境变量即可。
 
 ## 7. 镜像与 tag 规则
 
-- 双架构：`linux/amd64`、`linux/arm64`（同一 tag 的多平台 manifest）。
+- 三个镜像都发双架构：`linux/amd64`、`linux/arm64`（同一 tag 的多平台 manifest）。
 - tag push（`v1.2.3`）→ `v1.2.3`、`1.2`、`latest`、`sha-<短sha>` 四个 tag；
 - push main / PR → 只构建校验，不推送；
-- 后端镜像在 CI 里走「runner 先编二进制、镜像只组装」的快路径（见第 10 节），不在 QEMU 里跑 cargo；
-- CI 里还有一个单架构冒烟测试 job：真起容器验证「未安装态 503 → 安装 201 → web 首页 200 → `/api` 反代可达
-  → 爬虫 UA 分流到后端」，后端同样用 runner 上编好的 amd64 二进制组装后再跑。
+- 后端镜像与一体化镜像在 CI 里走「runner 先编二进制、镜像只组装」的快路径（见第 10 节），
+  不在 QEMU 里跑 cargo（一体化镜像的前端仍在镜像内构建）；
+- CI 里还有一个单架构冒烟测试 job，真起容器验证：「后端未安装态 503 → 安装 201」
+  「web 首页 200 → `/api` 反代可达 → 爬虫 UA 分流到后端」「一体化镜像静态 200 → `/api` 未安装态 503
+  → 安装 201 → 已安装 200」。
 
 ## 8. 常见问题
 
-**端口 8080 被占用** — 改 `docker-compose.yml` 的 `web.ports` 左侧，如 `"18080:80"`。
+**端口 8080 被占用** — 改 `docker-compose.yml` 的 `web.ports` 左侧，如 `"18080:80"`；
+一体化镜像改 `docker run` 的 `-p` 左侧即可。
+
+**一体化镜像为什么以 root 运行？** — nginx 要绑 80 端口、写 `/var/cache/nginx` 与 `/var/run`；
+非 root 需要额外处理端口能力与目录属主，与「一条命令先跑起来」的定位不符（文件顶部与第 4.1 节
+都写明了这一取舍）。要进程隔离/最小权限请用 compose 的两个镜像（后端非 root）。另外它写入 `/data`
+的文件属主是 root，之后改用 compose 前后端方案前要先修属主（见第 4.1 节）。
+
+**一体化镜像页面 502 或容器 unhealthy** — nginx 的反代目标是 `BACKEND_UPSTREAM`（镜像内默认
+`127.0.0.1:3000`）。若改过 `REEDBLOG_PORT` 却没同步改它，就会 502；`docker logs <容器名>` 里
+nginx 与后端的日志都有，先看后端是否起来。
 
 **卷属主 / 权限（`数据目录不可写`）** — 容器以 uid 10002(`reedblog`) 运行；命名卷首次挂载会继承镜像内
 `/data` 的属主，正常无需处理。若用**绑定挂载**宿主机目录（`-v /srv/reedblog:/data`），要先：
@@ -178,9 +245,13 @@ curl -s http://localhost:8080/robots.txt                                  # 含 
 ## 9. 说明与边界
 
 - 本仓库的开发机没有 Docker，`Dockerfile` / `docker-compose.yml` / CI workflow 是**静态校验 + 首次 CI
-  运行**验证的：CI 的 `smoke` job 会在 GitHub runner 上真跑一遍两个镜像（见 `.github/workflows/docker.yml`）。
-  后端镜像自引入 CI 快路径后（第 10 节），组装产物同样由 `smoke` job 真跑验证。
+  运行**验证的：CI 的 `smoke` job 会在 GitHub runner 上真跑一遍三个镜像（见 `.github/workflows/docker.yml`）。
+  后端镜像自引入 CI 快路径后（第 10 节），组装产物同样由 `smoke` job 真跑验证；一体化镜像从加入起就在
+  `smoke` 里跑「静态 200 → `/api` 未安装态 503 → 安装 201 → 已安装 200」。
 - 后端进程目前未实现优雅停机处理，容器 `SIGTERM` 走默认终止；`exec` 已保证信号直达后端进程（不是被 sh 吞掉）。
+  一体化镜像同理：后端是 PID 1，容器停止时 PID 1 退出，内核会清掉同 PID 命名空间里的 nginx，无需额外信号处理。
+- 一体化镜像**有意以 root 运行**（原因见第 4.1 节与 `deploy/docker/Dockerfile.allinone` 顶部注释），
+  这是它与 backend 镜像（非 root uid 10002）的既定差异，不是配置疏漏。
 - 备份请以「数据卷打包」为准（见第 2 节），它涵盖 `config.toml`（含 `jwt_secret`）与全部媒体文件。
 
 ## 10. 后端镜像的两条构建路径：本机自包含 vs CI 快路径
@@ -230,3 +301,15 @@ docker buildx build --platform linux/amd64,linux/arm64 \
 > 两份 Dockerfile 的 runtime 阶段（`debian:bookworm-slim`、`ca-certificates`+`curl`、非 root uid 10002、
 > `/data` 预建属主、`REEDBLOG_CONFIG`、`VOLUME`、`EXPOSE 3000`、HEALTHCHECK 200/503、entrypoint）
 > 逐项一致，只有二进制来源不同——改动运行时行为请两份一起改。
+
+**一体化镜像（`deploy/docker/Dockerfile.allinone`）** 只有 CI 快路径：它的后端二进制同样来自
+`binaries` job 的 `prebuilt/<TARGETARCH>/`，前端在镜像内用 `node:24-alpine` 构建，基础镜像是
+`nginx:stable-bookworm`（Debian/glibc；`nginx:alpine` 是 musl，跑不了 gnu 产物），
+入口与 backend 镜像共用 `deploy/docker/entrypoint-lib.sh`。手工构建示例：
+
+```bash
+# 先备好 prebuilt/amd64/、prebuilt/arm64/（步骤同上）
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -f deploy/docker/Dockerfile.allinone \
+  -t ghcr.io/langfordkuo/reedblog:dev --push .
+```

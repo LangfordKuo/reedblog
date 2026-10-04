@@ -43,15 +43,23 @@ cd C:\reedblog
 
 ## Docker（可选，最省事）
 
-仓库根目录自带 compose 编排（后端镜像 + Nginx/前端镜像），不用手工装 Nginx：
+最省事：一条命令跑整套（一体化镜像，Nginx + 后端同容器）：
 
 ```bash
-docker compose up -d --build
+docker run -d --name reedblog -p 8080:80 -v reedblog-data:/data \
+  --restart unless-stopped ghcr.io/langfordkuo/reedblog:latest
 # 打开 http://localhost:8080 → 首次访问走 /install 安装向导
 ```
 
+或者用仓库根目录自带的 compose 编排（后端镜像 + Nginx/前端镜像，两个容器、后端以非 root 运行，
+推荐长期使用，不用手工装 Nginx）：
+
+```bash
+docker compose up -d --build
+```
+
 数据全部落在 `reedblog-data` 卷（`/data`：config.toml、SQLite、uploads、plugins、themes）。
-切 MySQL、备份/恢复、GHCR 拉镜像直接跑等完整说明见 [DOCKER.md](DOCKER.md)。
+一体化镜像的取舍对比、docker run 分开跑、切 MySQL、备份/恢复等完整说明见 [DOCKER.md](DOCKER.md)。
 
 > `docker compose up -d --build` 走的是「容器内编译」的自包含路径（首次较慢）；GHCR 上的镜像由 CI 的
 > 快路径产出（runner 先编好 amd64/arm64 二进制，再用 `deploy/docker/Dockerfile.runtime` 组装，运行时

@@ -45,8 +45,10 @@ RUN groupadd --gid 10002 reedblog \
 
 COPY --from=builder /build/reedblog-backend /app/reedblog-backend
 COPY deploy/docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+# 入口脚本 source 的公共片段（数据目录检查 / 配置生成）；一体化镜像也用同一份
+COPY deploy/docker/entrypoint-lib.sh /usr/local/bin/entrypoint-lib.sh
 # 显式置执行位，不依赖构建上下文的文件权限（Windows 检出的仓库可能丢失 +x）
-RUN chmod 0755 /app/reedblog-backend /usr/local/bin/entrypoint.sh
+RUN chmod 0755 /app/reedblog-backend /usr/local/bin/entrypoint.sh /usr/local/bin/entrypoint-lib.sh
 
 WORKDIR /app
 ENV REEDBLOG_CONFIG=/data/config.toml

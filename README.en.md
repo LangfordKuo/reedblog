@@ -141,23 +141,73 @@ backend with systemd or similar.
 
 ## Docker deployment
 
-No Rust/Node/Nginx toolchain needed — the repo ships two images (backend, and
-Nginx/frontend) plus a compose file:
+No Rust/Node/Nginx toolchain needed. Images are published to GHCR (`linux/amd64` + `linux/arm64`),
+tags `vX.Y.Z` / `X.Y` / `latest` / `sha-<short-sha>`. Pick whichever of the three ways fits.
+
+### 1. Easiest: the whole stack in one command (all-in-one image)
+
+Nginx (frontend + `/api` reverse proxy + SEO crawler routing) and the backend share one container:
 
 ```bash
-docker compose up -d --build
-# open http://localhost:8080 → first visit goes through the /install wizard
+docker run -d --name reedblog -p 8080:80 -v reedblog-data:/data \
+  --restart unless-stopped ghcr.io/langfordkuo/reedblog:latest
 ```
 
-- All data lives in one named volume (`/data`: config.toml, SQLite, uploads, plugins, themes) —
-  removing containers does not lose data;
-- SQLite by default; MySQL via `--profile mysql`;
-- Images are published to GHCR: `ghcr.io/langfordkuo/reedblog-backend`,
-  `ghcr.io/langfordkuo/reedblog-web` (linux/amd64 + linux/arm64),
-  tags `vX.Y.Z` / `X.Y` / `latest` / `sha-<short-sha>`.
+Open **http://localhost:8080** → your first visit goes straight into the `/install` wizard
+(pick SQLite — zero dependencies). All data lives in the `reedblog-data` volume, so removing the
+container loses nothing; to upgrade, `docker pull`, remove the old container and re-run the same
+command with the same volume.
 
-Full guide (volumes and backups, switching to MySQL, environment variables, FAQ):
-[deploy/DOCKER.md](deploy/DOCKER.md).
+> ⚠️ Inside the all-in-one image **nginx runs as root** (it must bind port 80 and write its cache
+> directories — that is the price of the one-command setup). For process isolation with a non-root
+> backend (uid 10002), use the compose option below.
+
+### 2. Two `docker run` commands (backend + web images)
+
+```bash
+docker network create reedblog                 # lets the two containers talk
+docker volume create reedblog-data             # data volume (used by the backend)
+
+docker run -d --name reedblog-backend --network reedblog --network-alias backend \
+  -v reedblog-data:/data --restart unless-stopped \
+  ghcr.io/langfordkuo/reedblog-backend:latest
+
+docker run -d --name reedblog-web --network reedblog -p 8080:80 \
+  -e BACKEND_UPSTREAM=backend:3000 --restart unless-stopped \
+  ghcr.io/langfordkuo/reedblog-web:latest
+```
+
+Open **http://localhost:8080** → first visit goes through the `/install` wizard.
+`BACKEND_UPSTREAM` is Nginx's proxy target and must be **backend container name:port**
+(use `host.docker.internal:3000` to point at a backend running on the host) — a wrong value
+here gives you 502s.
+
+<details>
+<summary>Backend API only (no frontend pages)</summary>
+
+```bash
+docker run -d --name reedblog-backend -p 3000:3000 -v reedblog-data:/data \
+  --restart unless-stopped ghcr.io/langfordkuo/reedblog-backend:latest
+```
+
+Port 3000 returns API JSON only; there are no frontend pages and no SEO crawler routing
+(OG cards need the web layer).
+</details>
+
+### 3. docker compose (recommended for the long run)
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+Open **http://localhost:8080** → first visit goes through the `/install` wizard.
+Two containers (the backend runs non-root, uid 10002) share a compose network; ports and volumes
+live in `docker-compose.yml`, and all data lives in the named `/data` volume (config.toml, SQLite,
+uploads, plugins, themes) — removing containers does not lose data. SQLite by default; MySQL via
+`--profile mysql`.
+
+Full guide (trade-offs between the three images, volumes and backups, switching to MySQL,
+environment variables, upgrades, FAQ): [deploy/DOCKER.md](deploy/DOCKER.md).
 
 ## SEO / share metadata (crawler routing)
 

@@ -140,22 +140,67 @@ REEDBLOG_CONFIG=/opt/reedblog/config.toml /usr/local/bin/reedblog-backend
 
 ## Docker 部署
 
-不想手工装 Rust/Node/Nginx？仓库自带两个镜像（后端 + Nginx/前端）与 compose 编排：
+不想手工装 Rust/Node/Nginx？镜像发在 GHCR（`linux/amd64` + `linux/arm64`），
+tag `vX.Y.Z` / `X.Y` / `latest` / `sha-<短sha>`，三种跑法按需选。
+
+### 1. 最简单：一条命令跑整套（一体化镜像）
+
+Nginx（前端 + `/api` 反代 + SEO 爬虫分流）与后端在同一个容器里：
 
 ```bash
-docker compose up -d --build
-# 打开 http://localhost:8080 → 首次访问走 /install 安装向导
+docker run -d --name reedblog -p 8080:80 -v reedblog-data:/data \
+  --restart unless-stopped ghcr.io/langfordkuo/reedblog:latest
 ```
 
-- 全部数据在一个命名卷里（`/data`：config.toml、SQLite、uploads、plugins、themes），删容器不丢数据；
-- 默认 SQLite 单机，可选 `--profile mysql` 切 MySQL；
-- 镜像发到 GHCR：`ghcr.io/langfordkuo/reedblog-backend`、`ghcr.io/langfordkuo/reedblog-web`
-  （linux/amd64 + linux/arm64），tag `vX.Y.Z` / `X.Y` / `latest` / `sha-<短sha>`；
-- 后端镜像有两条构建路径：本机 `docker build` / compose 是容器内编译的自包含路径（零前置条件，首次较慢）；
-  CI 走「runner 先编二进制、镜像只组装」的快路径（`deploy/docker/Dockerfile.runtime`），产物运行时内容一致
-  ——见 [deploy/DOCKER.md](deploy/DOCKER.md) 第 10 节。
+打开 **http://localhost:8080** → 首次访问自动进入 `/install` 安装向导（数据库选 SQLite 即可，
+零依赖）。数据全在 `reedblog-data` 卷里，删容器不丢；升级时 `docker pull` 后删旧容器、
+用同一条命令带同一卷重跑即可。
 
-完整说明（数据卷与备份、切 MySQL、环境变量、常见问题）见
+> ⚠️ 一体化镜像内 **nginx 以 root 运行**（要绑 80 端口、写缓存目录，换来一条命令跑起来）。
+> 想要进程隔离与后端非 root（uid 10002），用下面的 compose 方案。
+
+### 2. docker run 分开跑（后端 + Web 两个镜像）
+
+```bash
+docker network create reedblog                 # 两个容器互通
+docker volume create reedblog-data             # 数据卷（后端用）
+
+docker run -d --name reedblog-backend --network reedblog --network-alias backend \
+  -v reedblog-data:/data --restart unless-stopped \
+  ghcr.io/langfordkuo/reedblog-backend:latest
+
+docker run -d --name reedblog-web --network reedblog -p 8080:80 \
+  -e BACKEND_UPSTREAM=backend:3000 --restart unless-stopped \
+  ghcr.io/langfordkuo/reedblog-web:latest
+```
+
+打开 **http://localhost:8080** → 首次访问自动进入 `/install` 安装向导。
+`BACKEND_UPSTREAM` 是 Nginx 的反代目标，要写成**后端容器名:端口**（同机也可用
+`host.docker.internal:3000` 指向宿主机上的后端）——这一项写错页面会 502。
+
+<details>
+<summary>只跑后端 API（没有前端页面）</summary>
+
+```bash
+docker run -d --name reedblog-backend -p 3000:3000 -v reedblog-data:/data \
+  --restart unless-stopped ghcr.io/langfordkuo/reedblog-backend:latest
+```
+
+浏览器访问 3000 拿到的是 API JSON；此模式没有前端页面，也不做 SEO 爬虫分流（OG 卡片需要 Web 层）。
+</details>
+
+### 3. docker compose（推荐长期使用）
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+打开 **http://localhost:8080** → 首次访问自动进入 `/install` 安装向导。
+两个容器（后端非 root，uid 10002）由 compose 网络互通；端口、数据卷都在 `docker-compose.yml` 里，
+数据全在命名卷 `/data`（config.toml、SQLite、uploads、plugins、themes），删容器不丢数据；
+默认 SQLite 单机，可选 `--profile mysql` 切 MySQL。
+
+完整说明（三个镜像的取舍对比、数据卷与备份、切 MySQL、环境变量、升级、常见问题）见
 [deploy/DOCKER.md](deploy/DOCKER.md)。
 
 ## SEO / 分享元信息（爬虫分流）

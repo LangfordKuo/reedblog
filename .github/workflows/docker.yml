@@ -5,9 +5,14 @@ name: Docker
 #   - push main / PR     → 只构建校验，不推送
 #   - workflow_dispatch  → 手动触发（同上：只有 tag ref 才推送）
 #
-# 后端镜像的构建路径：binaries job 先在 runner 上编出两个架构的二进制（amd64 原生 / arm64 交叉），
-# build job 再用 deploy/docker/Dockerfile.runtime 组装镜像——不在 QEMU 里跑 cargo，后端构建从
-# 三十多分钟降到几分钟（详见 binaries job 上方注释）。web 镜像维持原样（node 构建，双架构 ~4 分钟）。
+# 三个镜像：
+#   - backend  ：后端进程（CI 快路径：binaries job 先在 runner 上编出两个架构的二进制（amd64 原生 /
+#                arm64 交叉），build job 再用 deploy/docker/Dockerfile.runtime 组装镜像——不在 QEMU 里
+#                跑 cargo，后端构建从三十多分钟降到几分钟，详见 binaries job 上方注释）
+#   - web      ：nginx + 前端产物（node 构建，双架构 ~4 分钟）
+#   - allinone ：一体化镜像（nginx + 前端产物 + 后端二进制同容器），后端二进制复用 binaries 产物
+# 镜像名映射见 build 矩阵的 image_name（backend/web → reedblog-backend/reedblog-web，
+# allinone → ghcr.io/langfordkuo/reedblog）。
 on:
   push:
     branches: [main]
@@ -112,30 +117,38 @@ jobs:
   build:
     name: Build ${{ matrix.image }} (amd64 + arm64)
     runs-on: ubuntu-latest
-    # backend 需要 binaries 的产物；web 也一起等（job 级 needs 无法只对矩阵一项生效）
+    # backend/allinone 需要 binaries 的产物；web 也一起等（job 级 needs 无法只对矩阵一项生效）
     needs: [binaries]
     strategy:
       fail-fast: false
       matrix:
         include:
           - image: backend
+            # GHCR 上的镜像名（allinone 不带 -allinone 后缀，就叫 reedblog）
+            image_name: reedblog-backend
             # CI 快路径：二进制已由 binaries job 编好，只做运行时组装
             file: deploy/docker/Dockerfile.runtime
           - image: web
+            image_name: reedblog-web
             file: ./frontend/Dockerfile
+          - image: allinone
+            image_name: reedblog
+            # 前端在镜像内构建 + 后端二进制来自 binaries job（同 backend 的快路径）
+            file: deploy/docker/Dockerfile.allinone
     steps:
       - uses: actions/checkout@v4
 
-      # 下载到 prebuilt/，正好对上 Dockerfile.runtime 的 COPY prebuilt/${TARGETARCH}/...
+      # 下载到 prebuilt/，正好对上 Dockerfile.runtime / Dockerfile.allinone 的 COPY prebuilt/${TARGETARCH}/...
       - name: Download backend binaries
-        if: matrix.image == 'backend'
+        if: matrix.image == 'backend' || matrix.image == 'allinone'
         uses: actions/download-artifact@v4
         with:
           name: backend-binaries
           path: prebuilt
 
-      # QEMU 仍要装：arm64 那条 runtime 阶段里的 apt-get 是在模拟架构下执行的。
-      # 但相比原来在 QEMU 里全量 cargo build，这里只剩装包和拷二进制，分钟级。
+      # QEMU 仍要装：arm64 的构建步骤要在模拟架构下执行（backend 运行时基础镜像里的 apt-get、
+      # web/allinone 的 node 构建）。但相比原来在 QEMU 里全量 cargo build，这里只剩装包 / 前端构建 /
+      # 拷二进制，分钟级。
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -155,7 +168,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/langfordkuo/reedblog-${{ matrix.image }}
+          images: ghcr.io/langfordkuo/${{ matrix.image_name }}
           # latest 不用自动规则（避免 main 分支构建也打 latest），只在 tag 时显式加
           flavor: latest=false
           tags: |
@@ -178,11 +191,12 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
 
-  # 单架构 load 构建后在 runner 上真跑一遍：后端未安装态 503 → 安装 201；web 静态 200 + /api 反代可达。
+  # 单架构 load 构建后在 runner 上真跑一遍：后端未安装态 503 → 安装 201；web 静态 200 + /api 反代可达；
+  # 一体化镜像（nginx + 后端同容器）静态 200 + /api 未安装态 503 → 安装 201 → 已安装 200。
   # 这是「镜像真能启动」的唯一自动化验证（多架构构建本身只证明能编译）。
   # 后端同样用 binaries job 的 amd64 产物组装（冒烟里不再跑 cargo），断言与原来完全一致。
   smoke:
-    name: Smoke test (backend + web, amd64)
+    name: Smoke test (backend + web + allinone, amd64)
     runs-on: ubuntu-latest
     needs: [binaries]
     steps:
@@ -206,6 +220,9 @@ jobs:
           docker buildx build --load --platform linux/amd64 \
             --cache-from type=gha,scope=web \
             -t reedblog-web:smoke -f frontend/Dockerfile .
+          docker buildx build --load --platform linux/amd64 \
+            --cache-from type=gha,scope=allinone \
+            -t reedblog-allinone:smoke -f deploy/docker/Dockerfile.allinone .
 
       - name: Smoke test containers
         run: |
@@ -214,11 +231,12 @@ jobs:
           BACKEND_CT=reedblog-smoke-backend
           BACKEND2_CT=reedblog-smoke-backend-web
           WEB_CT=reedblog-smoke-web
+          ALLINONE_CT=reedblog-smoke-allinone
           NET=reedblog-smoke-net
 
           dump_logs() {
             echo "===== 失败诊断：容器日志 ====="
-            for c in "$BACKEND_CT" "$BACKEND2_CT" "$WEB_CT"; do
+            for c in "$BACKEND_CT" "$BACKEND2_CT" "$WEB_CT" "$ALLINONE_CT"; do
               if docker inspect "$c" >/dev/null 2>&1; then
                 echo "----- docker logs $c -----"
                 docker logs "$c" 2>&1 || true
@@ -229,9 +247,9 @@ jobs:
           cleanup() {
             status=$?
             if [ "$status" -ne 0 ]; then dump_logs; fi
-            docker rm -f "$BACKEND_CT" "$BACKEND2_CT" "$WEB_CT" >/dev/null 2>&1 || true
+            docker rm -f "$BACKEND_CT" "$BACKEND2_CT" "$WEB_CT" "$ALLINONE_CT" >/dev/null 2>&1 || true
             docker network rm "$NET" >/dev/null 2>&1 || true
-            docker volume rm reedblog-smoke-data reedblog-smoke-data2 >/dev/null 2>&1 || true
+            docker volume rm reedblog-smoke-data reedblog-smoke-data2 reedblog-smoke-data3 >/dev/null 2>&1 || true
             exit "$status"
           }
           trap cleanup EXIT
@@ -325,5 +343,45 @@ jobs:
           echo "爬虫 UA GET /posts/smoke -> $bot（未安装后端，期望 503 且不是 SPA）"
           [ "$bot" = "503" ] || { echo "冒烟失败：爬虫应被分流到后端（期望 503），实际 $bot"; exit 1; }
           grep -q 'id="root"' /tmp/reedblog-bot.html && { echo "冒烟失败：爬虫拿到了 SPA（UA 分流失效）"; exit 1; }
+
+          # ---------- 3) 一体化镜像：nginx + 后端同容器，静态 200 + /api 反代 + 完整安装流程 ----------
+          docker volume create reedblog-smoke-data3 >/dev/null
+          docker run -d --name "$ALLINONE_CT" -p 127.0.0.1:8090:80 \
+            -v reedblog-smoke-data3:/data reedblog-allinone:smoke
+
+          wait_http http://127.0.0.1:8090/
+          body="$(curl -s http://127.0.0.1:8090/)"
+          code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8090/)"
+          echo "一体化 GET / -> $code；index.html 标记: $(printf '%s' "$body" | grep -c 'id=\"root\"')"
+          [ "$code" = "200" ] || { echo "冒烟失败：一体化镜像首页期望 200，实际 $code"; exit 1; }
+          printf '%s' "$body" | grep -q 'id="root"' || { echo "冒烟失败：一体化镜像首页不是构建后的 index.html"; exit 1; }
+
+          # /api 由同容器 nginx 反代到后端：后端还没起来时是 502，等到后端就绪（未安装态 503）
+          wait_code http://127.0.0.1:8090/api/site/settings 503 200
+
+          code="$(curl -s -o /tmp/reedblog-aio-settings.json -w '%{http_code}' http://127.0.0.1:8090/api/site/settings)"
+          echo "一体化未安装态 GET /api/site/settings -> $code（期望 503）body=$(cat /tmp/reedblog-aio-settings.json)"
+          [ "$code" = "503" ] || { echo "冒烟失败：一体化镜像未安装态期望 503(not_installed)，实际 $code"; exit 1; }
+
+          code="$(curl -s -o /tmp/reedblog-aio-install.json -w '%{http_code}' -X POST \
+            http://127.0.0.1:8090/api/install -H 'Content-Type: application/json' \
+            -d '{"db_type":"sqlite","sqlite_path":"/data/reedblog.db","site":{"title":"aio-smoke"},"admin":{"username":"admin","password":"smoke-password-123"}}')"
+          echo "一体化 POST /api/install -> $code（期望 201）body=$(cat /tmp/reedblog-aio-install.json)"
+          [ "$code" = "201" ] || { echo "冒烟失败：一体化镜像安装期望 201，实际 $code"; exit 1; }
+
+          code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8090/api/site/settings)"
+          echo "一体化已安装 GET /api/site/settings -> $code（期望 200）"
+          [ "$code" = "200" ] || { echo "冒烟失败：一体化镜像安装后期望 200，实际 $code"; exit 1; }
+
+          # 镜像内 HEALTHCHECK（curl 探测 /api，200|503 算健康）确实能转 healthy：
+          # 这条同时兜住「nginx:stable-bookworm 将来不再自带 curl」的回归
+          health=""
+          for _ in $(seq 1 30); do
+            health="$(docker inspect -f '{{.State.Health.Status}}' "$ALLINONE_CT" 2>/dev/null || echo unknown)"
+            if [ "$health" = "healthy" ]; then break; fi
+            sleep 2
+          done
+          echo "一体化容器 HEALTHCHECK 状态 -> $health（期望 healthy）"
+          [ "$health" = "healthy" ] || { echo "冒烟失败：一体化镜像 HEALTHCHECK 未转 healthy（镜像内 curl 是否可用？）"; exit 1; }
 
           echo "✅ 冒烟测试全部通过"

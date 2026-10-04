@@ -1,0 +1,73 @@
+# syntax=docker/dockerfile:1.7
+# reedblog 一体化镜像：Nginx（前端静态 + /api 反代 + UA 爬虫分流）与后端同容器，
+# 一条 docker run 就能跑起整套 —— 面向「先跑起来看看」的场景；长期部署建议 compose 两个镜像。
+#
+#   docker run -d --name reedblog -p 8080:80 -v reedblog-data:/data \
+#     --restart unless-stopped ghcr.io/langfordkuo/reedblog:latest
+#   打开 http://localhost:8080 → 首次访问走 /install 安装向导
+#
+# 构建（上下文 = 仓库根；二进制由 CI 的 binaries job 预编译成 prebuilt/<arch>/）：
+#   docker buildx build --platform linux/amd64,linux/arm64 \
+#     -f deploy/docker/Dockerfile.allinone -t ghcr.io/langfordkuo/reedblog:dev .
+#
+# 运行身份：**root（容器内）**。与后端镜像的 uid 10002 非 root 不同——nginx 需要绑 80 端口、
+# 写 /var/cache/nginx 与 /var/run，非 root 要额外处理端口能力与目录属主，复杂度明显上升，而一体化
+# 镜像的定位就是「一条命令先跑起来」。追求进程隔离与最小权限请用 compose 的两个镜像方案（见
+# deploy/DOCKER.md「一体化镜像」一节）。
+#
+# 基础镜像用 Debian 版 nginx:stable-bookworm（→ debian:bookworm-slim，glibc 2.36）而不是 nginx:alpine：
+# 后端是 gnu 目标（bundled SQLite 走 gnu 工具链）的产物，musl 的 alpine 跑不了。
+
+# ---------- builder：前端静态产物（与 frontend/Dockerfile 相同步骤）----------
+FROM node:24-alpine AS builder
+
+WORKDIR /src
+# 先只拷依赖清单，package.json 不变时 npm ci 层命中缓存
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+
+COPY frontend/ ./
+RUN npm run build
+
+# ---------- runtime：Nginx + 后端二进制 ----------
+FROM nginx:stable-bookworm
+
+# buildx 自动注入的目标架构（amd64 / arm64），用来挑选对应二进制。
+# 必须放在 FROM 之后、COPY 之前：FROM 之前声明的 ARG 不进构建阶段，COPY 里会是空值。
+ARG TARGETARCH
+
+# curl 不需要额外安装：官方 Debian 变体的构建历史里，最终 apt-get install 列表含 curl
+# （与后端镜像一致，HEALTHCHECK 用它探测）。本仓库在 Docker Hub registry 上核对过
+# stable-bookworm 的镜像 config（含 build history），故不再重复 apt-get install。
+
+# 后端二进制：runner 预编译，与后端镜像用同一份 prebuilt/<TARGETARCH>/ 产物
+COPY prebuilt/${TARGETARCH}/reedblog-backend /app/reedblog-backend
+# 前端静态产物（Nginx 的 root 指向 /usr/share/nginx/html）
+COPY --from=builder /src/dist /usr/share/nginx/html
+# 站点配置模板：官方入口脚本在 $1=nginx 时用 envsubst 渲染到 /etc/nginx/conf.d/default.conf
+COPY deploy/docker/nginx.conf.template /etc/nginx/templates/default.conf.template
+# 入口脚本 + 公共片段（与后端镜像共用同一份配置生成逻辑）
+COPY deploy/docker/entrypoint-lib.sh /usr/local/bin/entrypoint-lib.sh
+COPY deploy/docker/allinone-entrypoint.sh /usr/local/bin/allinone-entrypoint.sh
+# 显式置执行位，不依赖构建上下文的文件权限（Windows 检出的仓库可能丢失 +x）
+RUN chmod 0755 /app/reedblog-backend /usr/local/bin/allinone-entrypoint.sh /usr/local/bin/entrypoint-lib.sh
+
+# /data 预建：空命名卷首次挂载会继承镜像内目录的属主；容器以 root 跑，root 属主即可写
+RUN install -d -m 0755 /data
+
+WORKDIR /app
+# 复用后端镜像的运行时约定：配置文件路径、数据卷、数据目录
+ENV REEDBLOG_CONFIG=/data/config.toml
+# 一体化容器里 nginx 与后端同机：反代目标就是本机的 3000（模板里拼成 http://${BACKEND_UPSTREAM}）。
+# 改 REEDBLOG_PORT 时要同步改这里，否则 nginx 反代不到后端。
+ENV BACKEND_UPSTREAM=127.0.0.1:3000
+VOLUME ["/data"]
+EXPOSE 80
+
+# 未安装态（GET /api/site/settings 经 nginx 反代到后端）返回 503 也算健康——安装前站点就是
+# 「未安装」；200（已安装）与 503 之外一律不健康（含 nginx 挂掉导致的连接失败）。
+# start-period 给 nginx + 后端启动留余量。
+HEALTHCHECK --interval=10s --timeout=5s --start-period=15s --retries=3 \
+    CMD curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1/api/site/settings" | grep -qE '^(200|503)$' || exit 1
+
+ENTRYPOINT ["/usr/local/bin/allinone-entrypoint.sh"]
