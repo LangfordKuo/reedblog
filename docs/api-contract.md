@@ -48,13 +48,16 @@ CommentAdmin = {id, post_id, post_title, author_name, email|null, content,
                 reply_count: int}             // 2026-10-03 嵌套评论新增：直接子回复条数
                                               // （两级存储下即整线程楼层数；子回复恒 0）
 PageKind     = "custom" | "message_board" | "links"
-PageSummary  = {id, title, slug, kind: PageKind, sort_order}
+               // icon：2026-10-04 新增（见「页面-图标」）。三个页面形状都带该字段；
+               // 空串=未设置，前端按 kind/slug 回退默认图标。只存「图标名」不存别名/颜色
+PageSummary  = {id, title, slug, kind: PageKind, icon: string, sort_order}
 PageLink     = {id, name, url, description, sort_order}
-PageDetail   = {id, title, slug, kind, content_html, sort_order, updated_at,
+PageDetail   = {id, title, slug, kind, icon, content_html, sort_order, updated_at,
                 links: [PageLink]}   // links 仅 kind=links 时非空，其余为 []
-PageAdmin    = {id, title, slug, kind, content_md, enabled: bool, sort_order,
+PageAdmin    = {id, title, slug, kind, icon, content_md, enabled: bool, sort_order,
                 built_in: bool, links: [PageLink], created_at, updated_at}
 AuthResult   = {token, username, expires_at}
+ProfileAdmin = {username, created_at}   // 2026-10-04 用户设置新增，见「管理员资料」
 UploadResult = {id: int, url, size: <字节数>, filename: <原始文件名回显>}
                // 2026-10-04 媒体库新增：id = 对应 media 记录 id（见「媒体库」）
 MediaItem    = {id: int, url, filename: <原始文件名；历史文件回退存储文件名>,
@@ -116,7 +119,7 @@ BackupImportResult = {ok: true, format_version: int, exported_at: string,
   - body: `{db_type: "sqlite"|"mysql", sqlite_path?: string(默认 "reedblog.db"), mysql?: {host, port, username, password, database}, admin: {username, password}, site: {title, subtitle?}}`
   - 行为：验证连接 → 写入 `backend/config.toml` → 建表（按 db_type 跑对应迁移）→ 创建管理员（argon2 哈希）→ 生成 JWT secret 存 config
   - **安装完成时自动注入示例分类/标签/文章/评论**（2026-10-03 定）：仅安装流程执行一次，正常启动路径绝不重复注入；注入失败只记 warning 日志、安装照常成功；响应形状不变（仍为 201 `{"ok": true}`）
-  - **安装完成时自动注入 3 个内置页面**（2026-10-03 定，见「页面」）：关于（/about）、留言板（/guestbook，kind=message_board）、友情链接（/links，kind=links）。内置页面属功能性数据而非示例内容：**安装路径与正常启动路径都会按 slug 幂等补齐**（已存在的行绝不覆盖，管理员的编辑/停用不受影响）；注入失败只记 warning 日志
+  - **安装完成时自动注入 3 个内置页面**（2026-10-03 定，见「页面」）：关于（/about，icon=info）、留言板（/guestbook，kind=message_board，icon=message-square）、友情链接（/links，kind=links，icon=link）。内置页面属功能性数据而非示例内容：**安装路径与正常启动路径都会按 slug 幂等补齐**（已存在的行绝不覆盖，管理员的编辑/停用不受影响；老库的已有行 icon 留在 `''`，由前端默认图标兜底）；注入失败只记 warning 日志
   - 已安装后再调 → 409 `{"error":{"code":"already_installed",...}}`
 - **未安装状态下**，除 `/api/health`、`/api/install/status`、`POST /api/install` 外的所有 `/api/*` 返回 503 `{"error":{"code":"not_installed",...}}`
 - 安装完成无需重启进程（进程内切换到已初始化状态即可；实现上允许重启，但接口行为必须一致）
@@ -328,7 +331,7 @@ dateModified/author/publisher/mainEntityOfPage/url/wordCount/可选 image；页�
 用于「关于」「留言板」「友情链接」及管理员自建页。
 
 - 存储：`pages` 表（id、title、slug 唯一、kind、content_md、content_html、enabled、
-  sort_order、built_in、created_at/updated_at；时间戳沿用全库 RFC3339 UTC 文本惯例）
+  sort_order、built_in、icon、created_at/updated_at；时间戳沿用全库 RFC3339 UTC 文本惯例）
   + `page_links` 表（友情链接：page_id、name、url、description、sort_order）。
   SQLite/MySQL 共用 SQL（Any 驱动，`?` 占位符，禁单方言）
 - kind 取值：`custom`（普通页）、`message_board`（留言板：前台页尾挂留言表单）、
@@ -340,6 +343,20 @@ dateModified/author/publisher/mainEntityOfPage/url/wordCount/可选 image；页�
   留言板 slug=guestbook/kind=message_board、友情链接 slug=links/kind=links，
   sort_order 依次 10/20/30，友情链接附示例链接）；启动路径按 slug 幂等补齐缺失的内置页。
   **built_in 页面不可删除（422 `page_builtin`），可停用、可改标题/内容/slug/排序/链接**
+  - 2026-10-04 图标补充：新装注入时自带语义图标（about=`info`、guestbook=`message-square`、
+    links=`link`）；**已存在的行绝不覆盖（沿用既有幂等注入语义，老库留在 `''`）**，
+    界面观感由前端按 kind/slug 默认图标兜底
+
+### 页面图标（icon，2026-10-04 新增）
+- 存储：`pages.icon` 列（SQLite `TEXT` / MySQL `VARCHAR(40)`，`NOT NULL DEFAULT ''`；
+  两份方言迁移各一份，对旧库为纯加列，已有行自动取 `''`——**平滑升级，无需回填**）
+- 形状：`PageSummary`/`PageDetail`/`PageAdmin` 均含 `icon: string`；创建/更新请求接受可选 `icon`
+- 校验（后端唯一判定）：trim 后必须匹配 `^[a-z0-9-]{0,40}$`（小写字母/数字/连字符，长度 ≤40；
+  空串=不设置），否则 422 `validation_error`。**后端不枚举具体图标名**（不与前端图标表耦合），
+  未知名字由前端忽略并回退到 kind 默认
+- 语义：`POST`/`PUT` 中 `icon` 缺失=保持原值（PUT）/取空串（POST）；显式 `icon: ""` = 清除图标
+- 前端回退（仅前端约定，非接口契约）：`message_board`→`message-square`、`links`→`link`、
+  `custom` 且 slug=`about`→`info`、其余 `custom`→`file-text`
 
 公开接口（已安装后可用；**不进未安装门禁白名单**，未安装 → 503 `not_installed`）：
 - `GET /api/pages` → `[PageSummary]`，仅 enabled，按 sort_order ASC, id ASC；
@@ -368,16 +385,18 @@ dateModified/author/publisher/mainEntityOfPage/url/wordCount/可选 image；页�
 - `GET /api/admin/pages` → `[PageAdmin]`（含停用页），按 sort_order ASC, id ASC
 - `GET /api/admin/pages/:id` → `PageAdmin`；不存在 → 404
 - `POST /api/admin/pages` → 201 `PageAdmin`（创建自定义页面，kind 恒为 custom）
-  - body: `{title, slug?, content_md, enabled?, sort_order?, links?}`
+  - body: `{title, slug?, content_md, enabled?, sort_order?, links?, icon?}`
   - slug 为空时自动生成（ASCII slugify；纯中文标题回退 `page-<id>`，插入后回填）；
     slug 在 pages 表内唯一，冲突 → 409 `slug_taken`（与文章 slug 各自独立命名空间）
-  - title trim 后非空 ≤255；slug ≤255；content_md 必填（可为空串）；校验失败 → 422 `validation_error`
+  - title trim 后非空 ≤255；slug ≤255；content_md 必填（可为空串）；icon 见「页面-图标」；
+    校验失败 → 422 `validation_error`
   - 自定义页 kind=custom，links 字段忽略（恒为 `[]`）
 - `PUT /api/admin/pages/:id` → `PageAdmin`（字段可选更新；**kind 不可改**，请求体中不接受）
-  - body: `{title?, slug?, content_md?, enabled?, sort_order?, links?}`
+  - body: `{title?, slug?, content_md?, enabled?, sort_order?, links?, icon?}`
   - links 为**全量替换**语义（按数组顺序重写 sort_order）：仅 kind=links 页面接受，其余 kind 忽略；
     单条校验：name/url trim 后非空（name ≤100、url ≤500 且必须为 http/https 绝对 URL、
     description ≤500），失败 → 422 `validation_error`
+  - icon 可选：缺失=保持原值，`""`=清除（回落前端默认）；格式校验见「页面-图标」
 - `PATCH /api/admin/pages/:id/toggle` → `PageAdmin`（enabled 取反；停用后前台立即 404、导航消失）
 - `DELETE /api/admin/pages/:id` → 204（连带删除该页 page_links 与 target_type='page' 的留言）；
   built_in → 422 `page_builtin`
@@ -860,6 +879,29 @@ docs/extensibility-contract.md「主题组件」与 docs/theme-development.md「
   锁定期间密码正确也拒绝**（见「反滥用」）
 - `GET /api/auth/me`（Bearer）→ `{"username"}`；无效/过期 → 401 `unauthorized`
 - JWT HS256，有效期 7 天，secret 来自 config.toml
+
+## 管理员资料 / 用户设置（2026-10-04 新增；全部需要 Bearer）
+单管理员模型：操作对象是 users 表首行（安装向导创建的唯一管理员）。
+后台「用户设置」页（`/admin/profile`）的数据源。
+
+- `GET /api/admin/profile` → 200 `ProfileAdmin` `{username, created_at}`；
+  无/无效 token → 401 `unauthorized`；未安装 → 503 `not_installed`（沿用现有中间件行为）
+- `PUT /api/admin/profile` → 200 `ProfileAdmin`（返回更新后的资料）
+  - body: `{current_password, username?, new_password?}`（`current_password` 必填；
+    字段整体缺失 → 422 `validation_error`）
+  - 先校验 `current_password`：与当前 argon2 哈希不匹配 → **401 `invalid_credentials`**
+    （与登录同码同文案），且**不落库**（用户名/密码都不变）
+  - `username` 可选：给了就改（trim 后写入）；格式校验与安装向导一致（trim 后非空，无自创强度规则）；
+    与现有用户名相同视为无变化；`users.username` 唯一，冲突（排除自身）→ **409 `username_taken`**
+  - `new_password` 可选：给了就改（非空；强度规则同样与安装向导一致——只要求非空，
+    不做长度/字符集校验）；用现有 `hash_password`（argon2 + 随机盐）重新哈希
+  - `username` 与 `new_password` **都缺（或为 null）→ 422 `validation_error`**（没有可改字段）
+  - 只改用户名或只改密码均可；两者都改时在同一请求内完成
+- **JWT 不失效（重要）**：改用户名 / 改密码都**不会**让已签发的 JWT 失效——
+  Bearer 校验只验签名与过期时间，不比对密码哈希，也不要求 token 里的 `sub` 与当前用户名一致。
+  **其它已登录设备不会被强制退出**（其本地缓存的旧用户名可能显示滞后，下次调用
+  `GET /api/admin/profile` 即取到新值）。如需强制全部设备下线：管理员手动修改
+  `config.toml` 的 `jwt_secret` 并重启（服务端**绝不自动轮换** jwt_secret）
 
 ## 管理接口（全部需要 Bearer）
 文章（2026-10-03 置顶与定时发布扩展；2026-10-04 回收站扩展，完整规则见「文章置顶与定时发布」

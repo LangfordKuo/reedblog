@@ -25,6 +25,8 @@ struct BuiltInPage {
     slug: &'static str,
     title: &'static str,
     kind: &'static str,
+    /// 语义图标名（契约「页面-图标」；新装注入时写入，老库已有行不覆盖）
+    icon: &'static str,
     sort_order: i64,
     content_md: &'static str,
     /// 友情链接示例数据（仅 kind=links 的内置页非空）
@@ -70,6 +72,7 @@ const BUILT_IN_PAGES: &[BuiltInPage] = &[
         slug: "about",
         title: "关于",
         kind: KIND_CUSTOM,
+        icon: "info",
         sort_order: 10,
         content_md: ABOUT_MD,
         links: &[],
@@ -78,6 +81,7 @@ const BUILT_IN_PAGES: &[BuiltInPage] = &[
         slug: "guestbook",
         title: "留言板",
         kind: KIND_MESSAGE_BOARD,
+        icon: "message-square",
         sort_order: 20,
         content_md: GUESTBOOK_MD,
         links: &[],
@@ -86,6 +90,7 @@ const BUILT_IN_PAGES: &[BuiltInPage] = &[
         slug: "links",
         title: "友情链接",
         kind: KIND_LINKS,
+        icon: "link",
         sort_order: 30,
         content_md: LINKS_MD,
         links: &[
@@ -135,13 +140,14 @@ pub async fn ensure_builtin_pages(
         let now = now_rfc3339();
         let content_html = render_markdown(bp.content_md);
         sqlx::query(
-            "INSERT INTO pages (title, slug, kind, content_md, content_html, enabled, \
+            "INSERT INTO pages (title, slug, kind, icon, content_md, content_html, enabled, \
              sort_order, built_in, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, 1, ?, 1, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, 1, ?, 1, ?, ?)",
         )
         .bind(bp.title)
         .bind(bp.slug)
         .bind(bp.kind)
+        .bind(bp.icon)
         .bind(bp.content_md)
         .bind(&content_html)
         .bind(bp.sort_order)
@@ -257,9 +263,35 @@ pub async fn replace_page_links(
     Ok(())
 }
 
+/// 校验并清洗页面图标名（契约「页面-图标」条款，2026-10-04 新增）：
+/// trim 后必须匹配 `^[a-z0-9-]{0,40}$`（小写字母/数字/连字符，空串=不设置），
+/// 否则 422 validation_error。后端**不枚举**具体图标名（避免与前端图标表耦合），
+/// 未知名字由前端忽略并回退到 kind 默认图标。
+/// 返回 None=调用方保持原值（请求未给 icon）；Some("")=显式清除。
+pub fn validate_icon(raw: Option<String>) -> ApiResult<Option<String>> {
+    match raw {
+        None => Ok(None),
+        Some(s) => {
+            let s = s.trim();
+            if s.chars().count() > 40 {
+                return Err(ApiError::validation("icon 不能超过 40 字符"));
+            }
+            if !s
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+            {
+                return Err(ApiError::validation(
+                    "icon 只能包含小写字母、数字与连字符（如 message-square）",
+                ));
+            }
+            Ok(Some(s.to_string()))
+        }
+    }
+}
+
 /// 管理端页面列表/详情的列集（content_html 不回读：公开详情实时渲染，管理端只需 content_md）
 pub const PAGE_COLUMNS: &str =
-    "id, title, slug, kind, content_md, enabled, sort_order, built_in, created_at, updated_at";
+    "id, title, slug, kind, icon, content_md, enabled, sort_order, built_in, created_at, updated_at";
 
 /// 行 → PageSummary（公开列表）
 pub fn row_to_page_summary(r: &AnyRow) -> PageSummary {
@@ -268,6 +300,7 @@ pub fn row_to_page_summary(r: &AnyRow) -> PageSummary {
         title: r.get::<String, _>("title"),
         slug: r.get::<String, _>("slug"),
         kind: r.get::<String, _>("kind"),
+        icon: r.get::<String, _>("icon"),
         sort_order: r.get::<i64, _>("sort_order"),
     }
 }
@@ -279,6 +312,7 @@ pub fn row_to_page_admin(r: &AnyRow, links: Vec<PageLink>) -> PageAdmin {
         title: r.get::<String, _>("title"),
         slug: r.get::<String, _>("slug"),
         kind: r.get::<String, _>("kind"),
+        icon: r.get::<String, _>("icon"),
         content_md: r.get::<String, _>("content_md"),
         enabled: row_bool(r, "enabled"),
         sort_order: r.get::<i64, _>("sort_order"),
@@ -298,6 +332,9 @@ mod tests {
         assert_eq!(BUILT_IN_PAGES.len(), 3);
         let kinds: Vec<&str> = BUILT_IN_PAGES.iter().map(|p| p.kind).collect();
         assert_eq!(kinds, vec![KIND_CUSTOM, KIND_MESSAGE_BOARD, KIND_LINKS]);
+        // 每个内置页带语义图标，且全部通过「页面-图标」格式校验
+        let icons: Vec<&str> = BUILT_IN_PAGES.iter().map(|p| p.icon).collect();
+        assert_eq!(icons, vec!["info", "message-square", "link"]);
         // slug 唯一、sort_order 严格递增（导航顺序稳定）
         let mut slugs = std::collections::HashSet::new();
         let mut prev = i64::MIN;
@@ -307,6 +344,10 @@ mod tests {
             prev = p.sort_order;
             assert!(!p.title.trim().is_empty());
             assert!(!p.content_md.trim().is_empty());
+            assert_eq!(
+                validate_icon(Some(p.icon.to_string())).unwrap().as_deref(),
+                Some(p.icon)
+            );
         }
         // 仅 links 页带示例链接，且链接全部合法
         for p in BUILT_IN_PAGES {
@@ -319,6 +360,44 @@ mod tests {
                 validate_link(name, url, desc).unwrap();
             }
         }
+    }
+
+    #[test]
+    fn icon_validation() {
+        // 合法：小写 slug 形式（含空串=清除）；未给字段=保持原值
+        assert_eq!(validate_icon(None).unwrap(), None);
+        assert_eq!(
+            validate_icon(Some(String::new())).unwrap(),
+            Some(String::new())
+        );
+        assert_eq!(
+            validate_icon(Some("  message-square  ".into()))
+                .unwrap()
+                .as_deref(),
+            Some("message-square")
+        );
+        assert_eq!(
+            validate_icon(Some("a1-b2".into())).unwrap().as_deref(),
+            Some("a1-b2")
+        );
+        assert_eq!(
+            validate_icon(Some("-".into())).unwrap().as_deref(),
+            Some("-")
+        );
+        // 非法：大写/下划线/空格/点/斜杠/中文/超长 → 422
+        for bad in [
+            "Message-Square",
+            "message_square",
+            "message square",
+            "file.text",
+            "../etc",
+            "图标",
+            "<script>",
+        ] {
+            assert!(validate_icon(Some(bad.into())).is_err(), "应拒绝: {bad}");
+        }
+        assert!(validate_icon(Some("a".repeat(41))).is_err());
+        assert!(validate_icon(Some("a".repeat(40))).is_ok());
     }
 
     #[test]

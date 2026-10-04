@@ -45,11 +45,13 @@ export interface PostDraftData {
   scheduleLocal: string
 }
 
-/** 页面编辑器的草稿载荷（含友情链接，kind=links 时一并防丢） */
+/** 页面编辑器的草稿载荷（含友情链接与图标，kind=links 时一并防丢） */
 export interface PageDraftData {
   title: string
   slug: string
   content: string
+  /** 图标名（契约「页面-图标」）；v1 旧草稿可能缺该字段，恢复处按 "" 兜底且不升版本 */
+  icon: string
   sortOrder: string
   links: PageLinkBody[]
 }

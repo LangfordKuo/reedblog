@@ -101,6 +101,8 @@ const PAGES_COLS: &[(&str, ColKind)] = cols![
     ("title", Text),
     ("slug", Text),
     ("kind", Text),
+    // 图标名（契约「页面-图标」，2026-10-04 新增；显式列清单必须同步，否则备份丢图标）
+    ("icon", Text),
     ("content_md", Text),
     ("content_html", Text),
     ("enabled", Int),

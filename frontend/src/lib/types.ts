@@ -238,6 +238,8 @@ export interface PageSummary {
   title: string
   slug: string
   kind: PageKind
+  /** 图标名（小写 slug 形式；空串=未设置，前端按 kind/slug 回退默认。契约「页面-图标」） */
+  icon: string
   sort_order: number
 }
 
@@ -256,6 +258,8 @@ export interface PageDetail {
   title: string
   slug: string
   kind: PageKind
+  /** 图标名（空串=未设置；契约「页面-图标」） */
+  icon: string
   content_html: string
   sort_order: number
   updated_at: string
@@ -268,6 +272,8 @@ export interface PageAdmin {
   title: string
   slug: string
   kind: PageKind
+  /** 图标名（空串=未设置；契约「页面-图标」） */
+  icon: string
   content_md: string
   enabled: boolean
   sort_order: number
@@ -286,6 +292,8 @@ export interface PageSaveBody {
   sort_order?: number
   /** 全量替换语义（数组顺序即排序）；仅 kind=links 页面生效 */
   links?: PageLinkBody[]
+  /** 图标名（可选；缺失=保持原值/POST 取空串，`""`=清除。契约「页面-图标」） */
+  icon?: string
 }
 
 /** 友情链接入参（sort_order 由服务端按数组顺序重写） */
@@ -299,6 +307,19 @@ export interface AuthResult {
   token: string
   username: string
   expires_at: string
+}
+
+/** GET/PUT /api/admin/profile 响应（契约「管理员资料 / 用户设置」条款） */
+export interface ProfileAdmin {
+  username: string
+  created_at: string
+}
+
+/** PUT /api/admin/profile 请求体（current_password 必填；username/new_password 至少给一个） */
+export interface ProfileSaveBody {
+  current_password: string
+  username?: string
+  new_password?: string
 }
 
 export interface Page<T> {

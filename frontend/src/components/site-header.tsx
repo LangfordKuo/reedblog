@@ -6,6 +6,7 @@ import { Button, buttonVariants } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { api } from "@/lib/api"
 import { isDarkRendered, setColorMode } from "@/lib/color-mode"
+import { getPageIcon } from "@/lib/page-icons"
 import type { PageSummary, SiteSettings } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -113,12 +114,20 @@ export function SiteHeader({ site, wide = false }: { site: SiteSettings | null; 
           <NavLink to="/" end className={navLinkClass}>
             首页
           </NavLink>
-          {/* 启用页面导航项（关于/留言板/友情链接/自定义页） */}
-          {navPages.map((p) => (
-            <NavLink key={p.id} to={`/pages/${encodeURIComponent(p.slug)}`} className={navLinkClass}>
-              {p.title}
-            </NavLink>
-          ))}
+          {/* 启用页面导航项（关于/留言板/友情链接/自定义页）；图标同左栏：自定义优先，kind 默认兜底 */}
+          {navPages.map((p) => {
+            const PageIcon = getPageIcon(p.icon, p.kind, p.slug)
+            return (
+              <NavLink
+                key={p.id}
+                to={`/pages/${encodeURIComponent(p.slug)}`}
+                className={(s) => cn(navLinkClass(s), "inline-flex items-center gap-1.5")}
+              >
+                <PageIcon className="size-4" aria-hidden />
+                {p.title}
+              </NavLink>
+            )
+          })}
           <NavLink to="/archive" className={navLinkClass}>
             归档
           </NavLink>

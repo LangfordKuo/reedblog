@@ -17,6 +17,7 @@ import {
   SettingsIcon,
   SlidersHorizontalIcon,
   TagsIcon,
+  UserCogIcon,
   XIcon,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -24,7 +25,7 @@ import { toast } from "sonner"
 import { BlockSpinner } from "@/components/spinner"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
-import { clearToken, getStoredUsername } from "@/lib/auth"
+import { USERNAME_CHANGED_EVENT, clearToken, getStoredUsername } from "@/lib/auth"
 import { cn } from "@/lib/utils"
 
 const navItems = [
@@ -41,6 +42,7 @@ const navItems = [
   { to: "/admin/themes/settings", label: "主题设置", icon: SlidersHorizontalIcon, end: true },
   { to: "/admin/settings", label: "站点管理", icon: SettingsIcon, end: false },
   { to: "/admin/email", label: "邮件通知", icon: MailIcon, end: true },
+  { to: "/admin/profile", label: "用户设置", icon: UserCogIcon, end: true },
   { to: "/admin/backup", label: "备份", icon: DatabaseBackupIcon, end: true },
 ]
 
@@ -54,12 +56,23 @@ export default function AdminLayout() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const location = useLocation()
   const navigate = useNavigate()
-  const username = getStoredUsername() ?? "管理员"
+  // 「用户设置」改名后侧栏立即跟随：订阅同页变更事件 + 其它标签页的 storage 事件
+  const [username, setUsername] = useState(() => getStoredUsername() ?? "管理员")
 
   // 路由切换后收起移动端抽屉
   useEffect(() => {
     setDrawerOpen(false)
   }, [location.pathname])
+
+  useEffect(() => {
+    const sync = () => setUsername(getStoredUsername() ?? "管理员")
+    window.addEventListener(USERNAME_CHANGED_EVENT, sync)
+    window.addEventListener("storage", sync)
+    return () => {
+      window.removeEventListener(USERNAME_CHANGED_EVENT, sync)
+      window.removeEventListener("storage", sync)
+    }
+  }, [])
 
   const logout = () => {
     clearToken()

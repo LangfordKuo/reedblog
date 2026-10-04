@@ -27,6 +27,8 @@ import type {
   PostRevisionSummary,
   PostSaveBody,
   PostStatus,
+  ProfileAdmin,
+  ProfileSaveBody,
   SearchResult,
   SiteInfo,
   SiteSettings,
@@ -370,6 +372,12 @@ export const api = {
     siteSettings: () => request<SiteSettingsAdmin>("GET", "/admin/site/settings"),
     updateSiteSettings: (body: SiteSettingsSaveBody) =>
       request<SiteSettingsAdmin>("PUT", "/admin/site/settings", body),
+
+    // 管理员资料 / 用户设置（契约「管理员资料 / 用户设置」条款）：改用户名/密码都必须
+    // 带 current_password；**改完不会让已签发的 JWT 失效**（其它已登录设备保持在线）
+    profile: () => request<ProfileAdmin>("GET", "/admin/profile"),
+    updateProfile: (body: ProfileSaveBody) =>
+      request<ProfileAdmin>("PUT", "/admin/profile", body),
 
     // 邮件通知（契约「邮件通知（SMTP）」条款）：密码永不返回，只有 has_password；
     // testSmtp 同步等待发送结果（失败时抛 ApiError，message 即后端给的明确原因）

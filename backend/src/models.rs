@@ -181,6 +181,9 @@ pub struct PageSummary {
     pub slug: String,
     /// "custom" | "message_board" | "links"（前端据此决定渲染留言表单/链接列表）
     pub kind: String,
+    /// 图标名（小写 slug 形式；空串=未设置，前端按 kind/slug 回退默认图标。
+    /// 契约「页面-图标」条款，2026-10-04 新增）
+    pub icon: String,
     pub sort_order: i64,
 }
 
@@ -202,6 +205,8 @@ pub struct PageDetail {
     pub title: String,
     pub slug: String,
     pub kind: String,
+    /// 图标名（空串=未设置；契约「页面-图标」）
+    pub icon: String,
     pub content_html: String,
     pub sort_order: i64,
     pub updated_at: String,
@@ -215,6 +220,8 @@ pub struct PageAdmin {
     pub title: String,
     pub slug: String,
     pub kind: String,
+    /// 图标名（空串=未设置；契约「页面-图标」）
+    pub icon: String,
     pub content_md: String,
     pub enabled: bool,
     pub sort_order: i64,
@@ -229,6 +236,24 @@ pub struct AuthResult {
     pub token: String,
     pub username: String,
     pub expires_at: String,
+}
+
+/// GET/PUT /api/admin/profile 响应（契约「管理员资料 / 用户设置」条款，2026-10-04 新增）
+#[derive(Debug, Clone, Serialize)]
+pub struct ProfileAdmin {
+    pub username: String,
+    pub created_at: String,
+}
+
+/// PUT /api/admin/profile 请求体：current_password 必填；
+/// username/new_password 可选，但两者都缺 → 422（没有可改字段）
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProfileBody {
+    pub current_password: String,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub new_password: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -583,6 +608,9 @@ pub struct PageBody {
     /// 全量替换语义（按数组顺序重写 sort_order）；仅 kind=links 页面接受，其余 kind 忽略
     #[serde(default)]
     pub links: Option<Vec<PageLinkBody>>,
+    /// 图标名（可选；缺失=保持原值/POST 取空串，`""`=清除。契约「页面-图标」）
+    #[serde(default)]
+    pub icon: Option<String>,
 }
 
 /// 友情链接单条入参（sort_order 由服务端按数组顺序重写，客户端传值忽略）

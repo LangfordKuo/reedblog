@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
 import { useAutosaveDraft } from "@/hooks/use-autosave-draft"
 import { api, errorMessage } from "@/lib/api"
@@ -32,6 +33,7 @@ import {
   type DraftEnvelope,
   type PageDraftData,
 } from "@/lib/draft"
+import { ICON_NAMES, getPageIcon } from "@/lib/page-icons"
 import type { PageAdmin, PageKind, PageLinkBody, PageSaveBody } from "@/lib/types"
 
 const KIND_LABELS: Record<PageKind, string> = {
@@ -40,11 +42,19 @@ const KIND_LABELS: Record<PageKind, string> = {
   links: "友情链接",
 }
 
+/**
+ * 「不设置（用默认）」选项的哨兵值：Radix Select 禁止 value=""，
+ * 而合法图标名只能是 [a-z0-9-]（契约「页面-图标」），下划线哨兵永不与之冲突
+ */
+const ICON_NONE = "__none__"
+const ICON_NONE_LABEL = "不设置（用默认）"
+
 /** 新建页面的空白草稿（基线 + 草稿比对基准） */
 const EMPTY_PAGE_DRAFT: PageDraftData = {
   title: "",
   slug: "",
   content: "",
+  icon: "",
   sortOrder: "0",
   links: [],
 }
@@ -55,6 +65,7 @@ function toDraftSnapshot(p: PageAdmin): PageDraftData {
     title: p.title,
     slug: p.slug,
     content: p.content_md,
+    icon: p.icon,
     sortOrder: String(p.sort_order),
     links: p.links.map((l) => ({ name: l.name, url: l.url, description: l.description })),
   }
@@ -75,6 +86,8 @@ export default function AdminPageEditPage() {
   const [title, setTitle] = useState("")
   const [slug, setSlug] = useState("")
   const [content, setContent] = useState("")
+  // 图标名（空串=不设置，前台按 kind/slug 回退默认；契约「页面-图标」）
+  const [icon, setIcon] = useState("")
   const [sortOrder, setSortOrder] = useState("0")
   const [kind, setKind] = useState<PageKind>("custom")
   const [builtIn, setBuiltIn] = useState(false)
@@ -102,6 +115,7 @@ export default function AdminPageEditPage() {
         setTitle(p.title)
         setSlug(p.slug)
         setContent(p.content_md)
+        setIcon(p.icon)
         setSortOrder(String(p.sort_order))
         setKind(p.kind)
         setBuiltIn(p.built_in)
@@ -141,8 +155,8 @@ export default function AdminPageEditPage() {
 
   // 当前编辑器快照 → 自动保存（1.5s 防抖 + 30s 强制；页面隐藏/卸载时补落）
   const draftSnapshot = useMemo<PageDraftData>(
-    () => ({ title, slug, content, sortOrder, links }),
-    [title, slug, content, sortOrder, links],
+    () => ({ title, slug, content, icon, sortOrder, links }),
+    [title, slug, content, icon, sortOrder, links],
   )
   const { markSaved } = useAutosaveDraft({
     storageKey: draftStorageKey,
@@ -158,6 +172,8 @@ export default function AdminPageEditPage() {
     setTitle(d.title)
     setSlug(d.slug)
     setContent(d.content)
+    // 旧版草稿（v1，无 icon 字段）恢复时按「不设置」处理，不静默丢内容
+    setIcon(d.icon ?? "")
     setSortOrder(d.sortOrder)
     setLinks(d.links.map((l) => ({ name: l.name, url: l.url, description: l.description })))
     setPendingDraft(null)
@@ -203,6 +219,8 @@ export default function AdminPageEditPage() {
       title: title.trim(),
       ...(slug.trim() ? { slug: slug.trim() } : {}),
       content_md: content,
+      // 空串=清除（前台回退 kind 默认）；后端只校验格式，不枚举名字
+      icon,
       sort_order: Number(sortOrder) || 0,
       // 全量替换语义；仅 links 页提交（其余 kind 后端也会忽略）
       ...(kind === "links"
@@ -237,6 +255,13 @@ export default function AdminPageEditPage() {
       setSaving(false)
     }
   }
+
+  // 图标选项：库里已存但不在精选表的合法名字（如 API 直接写入的）也列出，
+  // 避免用户一保存就被静默改写；预览走 getPageIcon（未知名字即 kind 默认）
+  const iconOptions: string[] =
+    icon && !(ICON_NAMES as readonly string[]).includes(icon)
+      ? [icon, ...ICON_NAMES]
+      : [...ICON_NAMES]
 
   if (loading) return <BlockSpinner label="加载页面…" />
   if (loadError) {
@@ -287,7 +312,7 @@ export default function AdminPageEditPage() {
         </Button>
       </div>
 
-      {/* 标题 / slug / 排序 */}
+      {/* 标题 / slug / 排序 / 图标 */}
       <Card>
         <CardContent className="grid gap-4">
           <div className="grid gap-1.5">
@@ -312,17 +337,47 @@ export default function AdminPageEditPage() {
               用于页面 URL /pages/:slug，留空自动生成；页面间唯一
             </p>
           </div>
-          <div className="grid gap-1.5 sm:max-w-xs">
-            <Label htmlFor="page-sort">排序</Label>
-            <Input
-              id="page-sort"
-              type="number"
-              value={sortOrder}
-              onChange={(e) => setSortOrder(e.target.value)}
-            />
-            <p className="text-xs text-muted-foreground">
-              数值越小越靠前（导航与列表按此排序；内置页依次为 10 / 20 / 30）
-            </p>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-1.5">
+              <Label htmlFor="page-sort">排序</Label>
+              <Input
+                id="page-sort"
+                type="number"
+                value={sortOrder}
+                onChange={(e) => setSortOrder(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                数值越小越靠前（导航与列表按此排序；内置页依次为 10 / 20 / 30）
+              </p>
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="page-icon">图标</Label>
+              <Select
+                value={icon || ICON_NONE}
+                onValueChange={(v) => setIcon(v === ICON_NONE ? "" : v)}
+              >
+                <SelectTrigger id="page-icon" className="w-full">
+                  <SelectValue placeholder={ICON_NONE_LABEL} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ICON_NONE}>{ICON_NONE_LABEL}</SelectItem>
+                  {iconOptions.map((name) => {
+                    const Icon = getPageIcon(name, kind, slug)
+                    return (
+                      <SelectItem key={name} value={name}>
+                        <span className="flex items-center gap-2">
+                          <Icon className="size-4 text-muted-foreground" aria-hidden />
+                          {name}
+                        </span>
+                      </SelectItem>
+                    )
+                  })}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                前台导航与标题旁显示；不设置时按页面类型自动选择（留言板/友情链接/关于各有默认）
+              </p>
+            </div>
           </div>
           {isEdit && kind !== "custom" && (
             <p className="text-xs text-muted-foreground">

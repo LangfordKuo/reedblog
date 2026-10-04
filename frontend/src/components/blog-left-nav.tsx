@@ -3,6 +3,7 @@ import { NavLink } from "react-router-dom"
 import { ArchiveIcon, FolderIcon, HomeIcon, TagsIcon } from "lucide-react"
 
 import { api } from "@/lib/api"
+import { getPageIcon } from "@/lib/page-icons"
 import type { Category, PageSummary } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -33,16 +34,20 @@ export function BlogLeftNav() {
           <HomeIcon className="size-4" />
           首页
         </NavLink>
-        {navPages.map((p) => (
-          <NavLink
-            key={p.id}
-            to={`/pages/${encodeURIComponent(p.slug)}`}
-            className={navLinkClass}
-          >
-            <span className="size-4" aria-hidden />
-            {p.title}
-          </NavLink>
-        ))}
+        {navPages.map((p) => {
+          // 图标：后台自定义优先，空/未知回退 kind 默认（契约「页面-图标」）
+          const PageIcon = getPageIcon(p.icon, p.kind, p.slug)
+          return (
+            <NavLink
+              key={p.id}
+              to={`/pages/${encodeURIComponent(p.slug)}`}
+              className={navLinkClass}
+            >
+              <PageIcon className="size-4" aria-hidden />
+              {p.title}
+            </NavLink>
+          )
+        })}
         <NavLink to="/archive" className={navLinkClass}>
           <ArchiveIcon className="size-4" />
           归档

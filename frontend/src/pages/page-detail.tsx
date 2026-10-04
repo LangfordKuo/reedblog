@@ -9,6 +9,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import { ApiError, api, errorMessage } from "@/lib/api"
 import { applyPageMeta } from "@/lib/meta"
+import { getPageIcon } from "@/lib/page-icons"
 import type { PageDetail } from "@/lib/types"
 
 type Status = "loading" | "ok" | "notfound" | "error"
@@ -87,11 +88,17 @@ export default function PageDetailPage() {
     )
   }
 
+  // 标题图标：后台自定义优先，空/未知回退 kind 默认（契约「页面-图标」）
+  const PageIcon = getPageIcon(page.icon, page.kind, page.slug)
+
   return (
     <div className="mx-auto max-w-3xl">
       <article>
         <header>
-          <h1 className="text-3xl font-bold tracking-tight">{page.title}</h1>
+          <h1 className="flex items-center gap-2.5 text-3xl font-bold tracking-tight">
+            <PageIcon className="size-7 shrink-0 text-muted-foreground" aria-hidden />
+            {page.title}
+          </h1>
         </header>
         <Separator className="my-6" />
         {/* 后端渲染的 HTML（pulldown-cmark + 文章同款钩子管线），prose 排版 */}

@@ -27,6 +27,7 @@ const AdminPageEditPage = lazy(() => import("@/pages/admin/page-edit"))
 const AdminPagesPage = lazy(() => import("@/pages/admin/pages"))
 const AdminPluginsPage = lazy(() => import("@/pages/admin/plugins"))
 const AdminPostEditPage = lazy(() => import("@/pages/admin/post-edit"))
+const AdminProfilePage = lazy(() => import("@/pages/admin/profile"))
 const AdminPostsPage = lazy(() => import("@/pages/admin/posts"))
 const AdminSettingsPage = lazy(() => import("@/pages/admin/settings"))
 const AdminTagsPage = lazy(() => import("@/pages/admin/tags"))
@@ -92,6 +93,8 @@ export default function App() {
                 {/* 当前激活主题的设置面板（仿 Typecho「外观 → 设置」） */}
                 <Route path="themes/settings" element={<AdminThemeSettingsPage />} />
                 <Route path="settings" element={<AdminSettingsPage />} />
+                {/* 用户设置（改用户名/密码；契约「管理员资料 / 用户设置」） */}
+                <Route path="profile" element={<AdminProfilePage />} />
                 <Route path="backup" element={<AdminBackupPage />} />
                 {/* 邮件通知（SMTP）：独立路径避免与 /admin/settings 前缀高亮互扰 */}
                 <Route path="email" element={<AdminEmailPage />} />

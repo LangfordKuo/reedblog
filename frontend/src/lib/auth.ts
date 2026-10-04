@@ -23,3 +23,12 @@ export function clearToken(): void {
 export function getStoredUsername(): string | null {
   return localStorage.getItem(USER_KEY)
 }
+
+/** 用户名变更通知事件（同页订阅者，如后台侧栏；storage 事件只在其它标签页触发） */
+export const USERNAME_CHANGED_EVENT = "reedblog:username-changed"
+
+/** 更新用户名缓存（「用户设置」改名成功后调用，后台侧栏等处立即跟随；不触碰 token） */
+export function setStoredUsername(username: string): void {
+  localStorage.setItem(USER_KEY, username)
+  window.dispatchEvent(new Event(USERNAME_CHANGED_EVENT))
+}

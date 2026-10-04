@@ -166,14 +166,26 @@ async fn builtin_pages_seeded_on_install() {
         .map(|p| p["kind"].as_str().unwrap())
         .collect();
     assert_eq!(kinds, vec!["custom", "message_board", "links"]);
+    // 图标（契约「页面-图标」）：新装内置页自带语义图标，公开摘要里可见
+    let icons: Vec<&str> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["icon"].as_str().unwrap())
+        .collect();
+    assert_eq!(icons, vec!["info", "message-square", "link"]);
 
-    // 管理列表：built_in=true、enabled=true，含 content_md
+    // 管理列表：built_in=true、enabled=true，含 content_md 与 icon
     let admin = admin_pages(&c, &base, &token).await;
     for slug in ["about", "guestbook", "links"] {
         let p = find_by_slug(&admin, slug);
         assert_eq!(p["built_in"], json!(true), "{slug} 应为内置页");
         assert_eq!(p["enabled"], json!(true), "{slug} 应默认启用");
         assert!(!p["content_md"].as_str().unwrap().is_empty());
+        assert!(
+            !p["icon"].as_str().unwrap().is_empty(),
+            "{slug} 新装应注入语义图标"
+        );
     }
 
     // 公开详情：content_html 为后端渲染产物（Markdown 加粗 → <strong>）
@@ -185,6 +197,7 @@ async fn builtin_pages_seeded_on_install() {
     assert_eq!(r.status(), 200);
     let detail = r.json::<Value>().await.unwrap();
     assert_eq!(detail["kind"], json!("custom"));
+    assert_eq!(detail["icon"], json!("info"), "公开详情应带 icon");
     assert!(detail["content_html"]
         .as_str()
         .unwrap()
@@ -1006,4 +1019,117 @@ async fn delete_page_cascades_comments() {
             .any(|it| it["id"] == gb_comment_id),
         "删除其他页面不得误伤留言板留言"
     );
+}
+
+// ---------- 10. 页面图标（契约「页面-图标」，2026-10-04 新增） ----------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn page_icon_flow() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (c, base, token) = setup(tmp.path()).await;
+
+    // 创建带 icon：创建响应（PageAdmin）回读
+    let r = c
+        .post(format!("{base}/api/admin/pages"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "title": "Icon Page", "slug": "icon-page", "content_md": "正文", "icon": "book"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 201, "{}", r.text().await.unwrap());
+    let created = r.json::<Value>().await.unwrap();
+    let id = created["id"].as_i64().unwrap();
+    assert_eq!(created["icon"], json!("book"));
+
+    // PageSummary（公开列表）与 PageDetail（公开详情）都能读到 icon
+    let r = c.get(format!("{base}/api/pages")).send().await.unwrap();
+    let list = r.json::<Value>().await.unwrap();
+    let summary = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["slug"] == json!("icon-page"))
+        .expect("公开列表应含新页面");
+    assert_eq!(summary["icon"], json!("book"), "PageSummary 应带 icon");
+    let r = c
+        .get(format!("{base}/api/pages/icon-page"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.json::<Value>().await.unwrap()["icon"], json!("book"));
+
+    // 未知但格式合法的图标名：后端不枚举，原样接受（未知名字由前端回退 kind 默认）
+    let r = c
+        .put(format!("{base}/api/admin/pages/{id}"))
+        .bearer_auth(&token)
+        .json(&json!({"icon": "definitely-not-a-real-icon"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(
+        r.json::<Value>().await.unwrap()["icon"],
+        json!("definitely-not-a-real-icon")
+    );
+
+    // PUT 缺失 icon → 保持原值（不是清除）
+    let r = c
+        .put(format!("{base}/api/admin/pages/{id}"))
+        .bearer_auth(&token)
+        .json(&json!({"title": "Icon Page 2"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(
+        r.json::<Value>().await.unwrap()["icon"],
+        json!("definitely-not-a-real-icon"),
+        "PUT 未给 icon 应保持原值"
+    );
+
+    // 非法 icon（大写/下划线/点/中文/超长）→ 422 validation_error，且不落库
+    for bad in [
+        json!("Message-Square"),
+        json!("message_square"),
+        json!("file.text"),
+        json!("图标"),
+        json!("a".repeat(41)),
+    ] {
+        let r = c
+            .put(format!("{base}/api/admin/pages/{id}"))
+            .bearer_auth(&token)
+            .json(&json!({"icon": bad}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 422, "应拒绝非法 icon: {bad}");
+        assert_eq!(err_code(r).await, "validation_error");
+    }
+    let r = c
+        .post(format!("{base}/api/admin/pages"))
+        .bearer_auth(&token)
+        .json(&json!({"title": "Bad Icon", "content_md": "x", "icon": "Bad_Name"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 422, "创建时非法 icon 同样 422");
+
+    // PUT icon:"" → 显式清除（前端回退默认图标）
+    let r = c
+        .put(format!("{base}/api/admin/pages/{id}"))
+        .bearer_auth(&token)
+        .json(&json!({"icon": ""}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(r.json::<Value>().await.unwrap()["icon"], json!(""));
+    let r = c
+        .get(format!("{base}/api/pages/icon-page"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.json::<Value>().await.unwrap()["icon"], json!(""));
 }

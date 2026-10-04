@@ -1,0 +1,217 @@
+/**
+ * 页面图标表（契约「页面-图标」条款，2026-10-04 新增）：
+ * - 后端只校验 icon 为 `^[a-z0-9-]{0,40}$`（小写 slug 形式），**不枚举**具体名字；
+ *   图标名 → 组件的映射由前端维护，未知名字忽略并回退 kind 默认
+ * - 逐个显式 import（**不做动态 import 整个 lucide**，避免打包体积暴涨）；
+ *   新增图标时只需在这里登记：ICON_NAMES 与 ICON_COMPONENTS 由类型互相约束
+ * - 图标名与 lucide 图标名一致（`message-square` → MessageSquareIcon），
+ *   存库值即此处的键；空串=未设置，走 kind/slug 默认回退
+ */
+
+import {
+  BellIcon,
+  BookIcon,
+  BookmarkIcon,
+  BriefcaseIcon,
+  CalendarIcon,
+  CameraIcon,
+  ClockIcon,
+  CloudIcon,
+  CodeIcon,
+  CoffeeIcon,
+  CompassIcon,
+  DatabaseIcon,
+  DownloadIcon,
+  ExternalLinkIcon,
+  FileTextIcon,
+  FlagIcon,
+  FolderIcon,
+  GiftIcon,
+  GlobeIcon,
+  GraduationCapIcon,
+  HandHeartIcon,
+  HeadphonesIcon,
+  HeartIcon,
+  ImageIcon,
+  InfoIcon,
+  KeyIcon,
+  LayersIcon,
+  LightbulbIcon,
+  LinkIcon,
+  LockIcon,
+  MailIcon,
+  MapPinIcon,
+  MessageSquareIcon,
+  MoonIcon,
+  MusicIcon,
+  NewspaperIcon,
+  PaletteIcon,
+  PenToolIcon,
+  PlaneIcon,
+  PuzzleIcon,
+  RocketIcon,
+  RssIcon,
+  SearchIcon,
+  SendIcon,
+  SettingsIcon,
+  ShieldIcon,
+  SmileIcon,
+  SparklesIcon,
+  StarIcon,
+  SunIcon,
+  TagIcon,
+  TerminalIcon,
+  ThumbsUpIcon,
+  UserIcon,
+  VideoIcon,
+  ZapIcon,
+  type LucideIcon,
+} from "lucide-react"
+
+import type { PageKind } from "./types"
+
+/** 精选图标名（30~60 个常用 lucide 图标；后台选择器的选项顺序即此顺序） */
+export const ICON_NAMES = [
+  "info",
+  "message-square",
+  "link",
+  "file-text",
+  "book",
+  "mail",
+  "heart",
+  "star",
+  "rss",
+  "music",
+  "camera",
+  "code",
+  "coffee",
+  "globe",
+  "user",
+  "tag",
+  "folder",
+  "calendar",
+  "image",
+  "video",
+  "map-pin",
+  "rocket",
+  "zap",
+  "thumbs-up",
+  "bookmark",
+  "download",
+  "external-link",
+  "search",
+  "settings",
+  "shield",
+  "smile",
+  "hand-heart",
+  "graduation-cap",
+  "briefcase",
+  "lightbulb",
+  "plane",
+  "gift",
+  "sun",
+  "moon",
+  "cloud",
+  "database",
+  "terminal",
+  "sparkles",
+  "pen-tool",
+  "palette",
+  "headphones",
+  "bell",
+  "clock",
+  "compass",
+  "flag",
+  "layers",
+  "puzzle",
+  "key",
+  "lock",
+  "newspaper",
+  "send",
+] as const
+
+export type PageIconName = (typeof ICON_NAMES)[number]
+
+/** 名字 → 组件（Record 的键类型保证与 ICON_NAMES 一一对应，缺一或多一都会编译报错） */
+const ICON_COMPONENTS: Record<PageIconName, LucideIcon> = {
+  info: InfoIcon,
+  "message-square": MessageSquareIcon,
+  link: LinkIcon,
+  "file-text": FileTextIcon,
+  book: BookIcon,
+  mail: MailIcon,
+  heart: HeartIcon,
+  star: StarIcon,
+  rss: RssIcon,
+  music: MusicIcon,
+  camera: CameraIcon,
+  code: CodeIcon,
+  coffee: CoffeeIcon,
+  globe: GlobeIcon,
+  user: UserIcon,
+  tag: TagIcon,
+  folder: FolderIcon,
+  calendar: CalendarIcon,
+  image: ImageIcon,
+  video: VideoIcon,
+  "map-pin": MapPinIcon,
+  rocket: RocketIcon,
+  zap: ZapIcon,
+  "thumbs-up": ThumbsUpIcon,
+  bookmark: BookmarkIcon,
+  download: DownloadIcon,
+  "external-link": ExternalLinkIcon,
+  search: SearchIcon,
+  settings: SettingsIcon,
+  shield: ShieldIcon,
+  smile: SmileIcon,
+  "hand-heart": HandHeartIcon,
+  "graduation-cap": GraduationCapIcon,
+  briefcase: BriefcaseIcon,
+  lightbulb: LightbulbIcon,
+  plane: PlaneIcon,
+  gift: GiftIcon,
+  sun: SunIcon,
+  moon: MoonIcon,
+  cloud: CloudIcon,
+  database: DatabaseIcon,
+  terminal: TerminalIcon,
+  sparkles: SparklesIcon,
+  "pen-tool": PenToolIcon,
+  palette: PaletteIcon,
+  headphones: HeadphonesIcon,
+  bell: BellIcon,
+  clock: ClockIcon,
+  compass: CompassIcon,
+  flag: FlagIcon,
+  layers: LayersIcon,
+  puzzle: PuzzleIcon,
+  key: KeyIcon,
+  lock: LockIcon,
+  newspaper: NewspaperIcon,
+  send: SendIcon,
+}
+
+/** kind 默认图标（icon 为空串或未知名字时兜底；契约前端回退约定） */
+export const DEFAULT_ICON_BY_KIND: Record<PageKind, LucideIcon> = {
+  message_board: MessageSquareIcon,
+  links: LinkIcon,
+  custom: FileTextIcon,
+}
+
+/**
+ * 解析页面图标（查表 → 找不到回退 kind 默认）：
+ * - `name` 命中精选表 → 对应组件
+ * - 空串 / null / 未知名字 → kind 默认；`custom` 且 slug=`about`（内置关于页）→ info
+ */
+export function getPageIcon(
+  name: string | null | undefined,
+  kind: PageKind,
+  slug?: string,
+): LucideIcon {
+  if (name && Object.prototype.hasOwnProperty.call(ICON_COMPONENTS, name)) {
+    return ICON_COMPONENTS[name as PageIconName]
+  }
+  if (kind === "custom" && slug === "about") return InfoIcon
+  return DEFAULT_ICON_BY_KIND[kind] ?? FileTextIcon
+}

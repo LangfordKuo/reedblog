@@ -29,7 +29,7 @@ use crate::views::client_ip;
 pub async fn list_pages(State(state): State<AppState>) -> ApiResult<Json<Vec<PageSummary>>> {
     let (pool, _db_type) = require_pool(&state).await?;
     let rows = sqlx::query(
-        "SELECT id, title, slug, kind, sort_order FROM pages \
+        "SELECT id, title, slug, kind, icon, sort_order FROM pages \
          WHERE enabled = 1 ORDER BY sort_order ASC, id ASC",
     )
     .fetch_all(&pool)
@@ -80,6 +80,7 @@ pub async fn get_page(
         title,
         slug,
         kind,
+        icon: row.get::<String, _>("icon"),
         content_html,
         sort_order: row.get::<i64, _>("sort_order"),
         updated_at: row.get::<String, _>("updated_at"),

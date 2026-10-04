@@ -34,9 +34,9 @@ use tower_http::cors::CorsLayer;
 use config::Config;
 use error::ApiError;
 use handlers::{
-    admin_comments, admin_media, admin_pages, admin_plugins, admin_posts, admin_smtp, admin_terms,
-    admin_themes, backup as admin_backup, feed, frontend, install, public, seo as html_seo,
-    site_auth, site_settings, uploads,
+    admin_comments, admin_media, admin_pages, admin_plugins, admin_posts, admin_profile,
+    admin_smtp, admin_terms, admin_themes, backup as admin_backup, feed, frontend, install, public,
+    seo as html_seo, site_auth, site_settings, uploads,
 };
 // handlers::pages 与领域模块 crate::pages 同名，导入时加别名区分
 use handlers::pages as public_pages;
@@ -206,6 +206,12 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
             "/admin/site/settings",
             get(site_settings::admin_get_site_settings)
                 .put(site_settings::admin_update_site_settings),
+        )
+        // 管理：管理员资料 / 用户设置（契约「管理员资料 / 用户设置」条款；改用户名/密码
+        // 不影响已签发 JWT，其它已登录设备保持在线）
+        .route(
+            "/admin/profile",
+            get(admin_profile::admin_get_profile).put(admin_profile::admin_update_profile),
         )
         // 管理：邮件通知（契约「邮件通知（SMTP）」条款；密码只读 config.toml/env，
         // 绝不入库、绝不返回——接口只回 has_password）

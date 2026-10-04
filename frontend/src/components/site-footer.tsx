@@ -14,7 +14,14 @@ export function SiteFooter({ site, wide = false }: { site: SiteSettings | null; 
       >
         <div>
           © {new Date().getFullYear()} {site?.title || "reedblog"} · Powered by{" "}
-          <span className="font-medium">reedblog</span>
+          <a
+            href="https://github.com/LangfordKuo/reedblog"
+            target="_blank"
+            rel="noreferrer"
+            className="font-medium transition-colors hover:text-foreground hover:underline"
+          >
+            reedblog
+          </a>
         </div>
         {site?.footer_text && (
           <div className="whitespace-pre-line">{site.footer_text}</div>

@@ -2,7 +2,8 @@
 //! - GET    /api/admin/pages           → [PageAdmin]（含停用页，sort_order ASC, id ASC）
 //! - POST   /api/admin/pages           → 201 PageAdmin（创建自定义页面，kind 恒为 custom）
 //! - GET    /api/admin/pages/:id       → PageAdmin
-//! - PUT    /api/admin/pages/:id       → PageAdmin（kind 不可改；links 全量替换，仅 kind=links 生效）
+//! - PUT    /api/admin/pages/:id       → PageAdmin（kind 不可改；links 全量替换，仅 kind=links 生效；
+//!                                            icon 可选，缺失保持原值、""=清除，见契约「页面-图标」）
 //! - PATCH  /api/admin/pages/:id/toggle → PageAdmin（enabled 取反）
 //! - DELETE /api/admin/pages/:id       → 204（built_in → 422 page_builtin）
 
@@ -15,8 +16,8 @@ use sqlx::Row;
 use crate::error::{ApiError, ApiResult, ValidJson};
 use crate::models::{PageAdmin, PageBody};
 use crate::pages::{
-    fetch_page_links, replace_page_links, row_bool, row_to_page_admin, KIND_CUSTOM, KIND_LINKS,
-    PAGE_COLUMNS,
+    fetch_page_links, replace_page_links, row_bool, row_to_page_admin, validate_icon, KIND_CUSTOM,
+    KIND_LINKS, PAGE_COLUMNS,
 };
 use crate::state::{now_rfc3339, require_pool, AppState};
 
@@ -121,6 +122,8 @@ pub async fn admin_create_page(
     }
     let enabled = body.enabled.unwrap_or(true);
     let sort_order = body.sort_order.unwrap_or(0);
+    // icon 可选（契约「页面-图标」）：POST 缺省取空串（前端按 kind/slug 兜底默认）
+    let icon = validate_icon(body.icon)?.unwrap_or_default();
 
     // slug：提供则原样使用；为空自动生成（ASCII slugify；纯中文回退 page-<id>，插入后回填）
     let provided_slug = body
@@ -156,12 +159,13 @@ pub async fn admin_create_page(
 
     let mut conn = pool.acquire().await?;
     let insert = sqlx::query(
-        "INSERT INTO pages (title, slug, kind, content_md, content_html, enabled, sort_order, \
-         built_in, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
+        "INSERT INTO pages (title, slug, kind, icon, content_md, content_html, enabled, sort_order, \
+         built_in, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
     )
     .bind(&title)
     .bind(&slug)
     .bind(KIND_CUSTOM)
+    .bind(&icon)
     .bind(&content_md)
     .bind(&content_html)
     .bind(enabled_flag)
@@ -221,6 +225,8 @@ pub async fn admin_update_page(
     let sort_order = body
         .sort_order
         .unwrap_or_else(|| existing.get::<i64, _>("sort_order"));
+    // icon：缺失保持原值，显式 ""=清除（契约「页面-图标」）；非法格式 → 422
+    let icon = validate_icon(body.icon)?.unwrap_or_else(|| existing.get::<String, _>("icon"));
 
     let mut slug = existing.get::<String, _>("slug");
     if let Some(s) = body
@@ -250,11 +256,12 @@ pub async fn admin_update_page(
     let content_html = render_markdown(&content_md);
     let enabled_flag: i64 = if enabled { 1 } else { 0 };
     let update = sqlx::query(
-        "UPDATE pages SET title = ?, slug = ?, content_md = ?, content_html = ?, enabled = ?, \
-         sort_order = ?, updated_at = ? WHERE id = ?",
+        "UPDATE pages SET title = ?, slug = ?, icon = ?, content_md = ?, content_html = ?, \
+         enabled = ?, sort_order = ?, updated_at = ? WHERE id = ?",
     )
     .bind(&title)
     .bind(&slug)
+    .bind(&icon)
     .bind(&content_md)
     .bind(&content_html)
     .bind(enabled_flag)

@@ -19,8 +19,15 @@ import {
 } from "@/components/ui/table"
 import { api, errorMessage } from "@/lib/api"
 import { clearPageDraft } from "@/lib/draft"
+import { getPageIcon } from "@/lib/page-icons"
 import { formatDate } from "@/lib/utils"
 import type { PageAdmin, PageKind } from "@/lib/types"
+
+/** 列表标题前的页面图标：自定义优先，空/未知回退 kind 默认（契约「页面-图标」） */
+function PageIconMark({ page }: { page: PageAdmin }) {
+  const Icon = getPageIcon(page.icon, page.kind, page.slug)
+  return <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+}
 
 /** kind 徽标：类型不可改，仅展示 */
 function PageKindBadge({ kind }: { kind: PageKind }) {
@@ -139,6 +146,7 @@ export default function AdminPagesPage() {
                   <TableRow key={p.id}>
                     <TableCell className="max-w-64">
                       <div className="flex items-center gap-2">
+                        <PageIconMark page={p} />
                         <button
                           type="button"
                           onClick={() => navigate(`/admin/pages/${p.id}/edit`)}
