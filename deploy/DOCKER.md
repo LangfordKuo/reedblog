@@ -135,8 +135,9 @@ web 容器：`BACKEND_UPSTREAM`（默认 `backend:3000`）。SMTP 密码沿用�
 - 双架构：`linux/amd64`、`linux/arm64`（同一 tag 的多平台 manifest）。
 - tag push（`v1.2.3`）→ `v1.2.3`、`1.2`、`latest`、`sha-<短sha>` 四个 tag；
 - push main / PR → 只构建校验，不推送；
+- 后端镜像在 CI 里走「runner 先编二进制、镜像只组装」的快路径（见第 10 节），不在 QEMU 里跑 cargo；
 - CI 里还有一个单架构冒烟测试 job：真起容器验证「未安装态 503 → 安装 201 → web 首页 200 → `/api` 反代可达
-  → 爬虫 UA 分流到后端」。
+  → 爬虫 UA 分流到后端」，后端同样用 runner 上编好的 amd64 二进制组装后再跑。
 
 ## 8. 常见问题
 
@@ -178,5 +179,54 @@ curl -s http://localhost:8080/robots.txt                                  # 含 
 
 - 本仓库的开发机没有 Docker，`Dockerfile` / `docker-compose.yml` / CI workflow 是**静态校验 + 首次 CI
   运行**验证的：CI 的 `smoke` job 会在 GitHub runner 上真跑一遍两个镜像（见 `.github/workflows/docker.yml`）。
+  后端镜像自引入 CI 快路径后（第 10 节），组装产物同样由 `smoke` job 真跑验证。
 - 后端进程目前未实现优雅停机处理，容器 `SIGTERM` 走默认终止；`exec` 已保证信号直达后端进程（不是被 sh 吞掉）。
 - 备份请以「数据卷打包」为准（见第 2 节），它涵盖 `config.toml`（含 `jwt_secret`）与全部媒体文件。
+
+## 10. 后端镜像的两条构建路径：本机自包含 vs CI 快路径
+
+两条路径产出的运行时镜像内容一致，按场景选：
+
+| | 本机自包含 | CI 快路径 |
+|---|---|---|
+| Dockerfile | 仓库根 `Dockerfile` | `deploy/docker/Dockerfile.runtime` |
+| 前置条件 | 只要 Docker | 构建前备好 `prebuilt/amd64/`、`prebuilt/arm64/` 二进制 |
+| 编译在哪 | 容器内（`cargo build --release --locked`，bundled SQLite 的 C 也一起编） | runner 上：amd64 原生 + arm64 交叉（同 `release.yml` 的 `gcc-aarch64-linux-gnu` 方案） |
+| 用途 | 本地开发、离线复现镜像 | `.github/workflows/docker.yml`（build + smoke） |
+
+**本机自包含**（首次全量编译，较慢；compose 走的也是这条）：
+
+```bash
+docker build -t reedblog-backend .
+docker compose up -d --build        # 等价
+```
+
+**CI / 手工组装快路径**（构建上下文 = 仓库根）：
+
+```bash
+# 1) 先备好两个架构的二进制（CI 里由 docker.yml 的 binaries job 完成，Swatinem/rust-cache 缓存 target/）
+cd backend
+cargo build --release --locked --target x86_64-unknown-linux-gnu
+# arm64 交叉（Linux；与 release.yml 用同一组变量）
+sudo apt-get install -y gcc-aarch64-linux-gnu
+CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
+AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar \
+CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+  cargo build --release --locked --target aarch64-unknown-linux-gnu
+cd ..
+
+# 2) 摆成 prebuilt/<TARGETARCH>/ 布局后组装镜像（Dockerfile.runtime 用 buildx 的 TARGETARCH 选二进制）
+mkdir -p prebuilt/amd64 prebuilt/arm64
+cp backend/target/x86_64-unknown-linux-gnu/release/reedblog-backend prebuilt/amd64/
+cp backend/target/aarch64-unknown-linux-gnu/release/reedblog-backend prebuilt/arm64/
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -f deploy/docker/Dockerfile.runtime \
+  -t ghcr.io/langfordkuo/reedblog-backend:dev --push .
+```
+
+> 为什么要这条快路径：原先后端镜像直接在 buildx 里构建，arm64 要在 QEMU 里全量 `cargo build`
+> （含 bundled SQLite 的 C 编译），单次 30 分钟以上；且 BuildKit 的 cache mount 不进 gha 缓存，
+> 等于每次全量重编。改成 runner 预编译 + rust-cache 缓存 `backend/target` 后，热缓存只有增量编译。
+> 两份 Dockerfile 的 runtime 阶段（`debian:bookworm-slim`、`ca-certificates`+`curl`、非 root uid 10002、
+> `/data` 预建属主、`REEDBLOG_CONFIG`、`VOLUME`、`EXPOSE 3000`、HEALTHCHECK 200/503、entrypoint）
+> 逐项一致，只有二进制来源不同——改动运行时行为请两份一起改。

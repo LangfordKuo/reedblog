@@ -1,8 +1,13 @@
 # syntax=docker/dockerfile:1.7
 # reedblog 后端镜像（只跑后端进程；前端 dist 由 reedblog-web 镜像的 Nginx 托管）
 #
-# 构建（构建上下文 = 仓库根）：
-#   docker build -t reedblog-backend .
+# 这是「本机自包含」构建路径：容器内 cargo build，零前置条件（只要 Docker），首次全量编译较慢。
+#   docker build -t reedblog-backend .          # 构建上下文 = 仓库根
+#
+# CI 走的是快路径 deploy/docker/Dockerfile.runtime：二进制先在 runner 上编好（amd64 原生 / arm64 交叉），
+# 镜像里只做组装——避免 buildx 在 QEMU 里模拟 arm64 全量编译（详见该文件顶部注释与 deploy/DOCKER.md）。
+# 两份文件的 runtime 阶段保持同步：非 root / HEALTHCHECK / /data 卷属主 / entrypoint 改动请一起改。
+#
 # 运行：
 #   docker run -d -p 3000:3000 -v reedblog-data:/data ghcr.io/langfordkuo/reedblog-backend
 #

@@ -150,7 +150,10 @@ docker compose up -d --build
 - 全部数据在一个命名卷里（`/data`：config.toml、SQLite、uploads、plugins、themes），删容器不丢数据；
 - 默认 SQLite 单机，可选 `--profile mysql` 切 MySQL；
 - 镜像发到 GHCR：`ghcr.io/langfordkuo/reedblog-backend`、`ghcr.io/langfordkuo/reedblog-web`
-  （linux/amd64 + linux/arm64），tag `vX.Y.Z` / `X.Y` / `latest` / `sha-<短sha>`。
+  （linux/amd64 + linux/arm64），tag `vX.Y.Z` / `X.Y` / `latest` / `sha-<短sha>`；
+- 后端镜像有两条构建路径：本机 `docker build` / compose 是容器内编译的自包含路径（零前置条件，首次较慢）；
+  CI 走「runner 先编二进制、镜像只组装」的快路径（`deploy/docker/Dockerfile.runtime`），产物运行时内容一致
+  ——见 [deploy/DOCKER.md](deploy/DOCKER.md) 第 10 节。
 
 完整说明（数据卷与备份、切 MySQL、环境变量、常见问题）见
 [deploy/DOCKER.md](deploy/DOCKER.md)。

@@ -53,6 +53,10 @@ docker compose up -d --build
 数据全部落在 `reedblog-data` 卷（`/data`：config.toml、SQLite、uploads、plugins、themes）。
 切 MySQL、备份/恢复、GHCR 拉镜像直接跑等完整说明见 [DOCKER.md](DOCKER.md)。
 
+> `docker compose up -d --build` 走的是「容器内编译」的自包含路径（首次较慢）；GHCR 上的镜像由 CI 的
+> 快路径产出（runner 先编好 amd64/arm64 二进制，再用 `deploy/docker/Dockerfile.runtime` 组装，运行时
+> 镜像内容一致）——见 DOCKER.md 第 10 节。
+
 ## 注意
 
 - 数据库：SQLite（默认，文件路径在 `config.toml`）或 MySQL（安装向导里选）。SQLite 为**内置编译**，无需系统安装 sqlite。

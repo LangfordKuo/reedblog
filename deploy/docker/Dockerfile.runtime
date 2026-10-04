@@ -1,0 +1,62 @@
+# syntax=docker/dockerfile:1.7
+# reedblog 后端镜像 · CI 快路径：二进制已在 runner 上编译好，镜像里只做组装，不再跑 cargo。
+#
+# 为什么单独有这份文件：原先直接用仓库根 Dockerfile 在 buildx 里构建双架构，arm64 要在 QEMU 里
+# 全量 cargo build（含 bundled SQLite 的 C 编译），一次三十多分钟；且 BuildKit 的 cache mount
+# 不进 gha 缓存，等于每次全量重编。现在改为：
+#   1) CI 的 binaries job 在 runner 上编译出两个架构的二进制（amd64 原生 / arm64 交叉，见
+#      .github/workflows/docker.yml，交叉方式与 release.yml 完全一致）；
+#   2) 本文件只把 prebuilt/<TARGETARCH>/reedblog-backend 拷进 debian-slim 运行时镜像。
+#
+# 本机想从源码构建（零前置条件，容器内编译，首次较慢）请用仓库根 Dockerfile：
+#   docker build -t reedblog-backend .
+#
+# CI / 手工组装示例（构建上下文 = 仓库根，需先备好 prebuilt/amd64 与 prebuilt/arm64）：
+#   docker buildx build --platform linux/amd64,linux/arm64 \
+#     -f deploy/docker/Dockerfile.runtime \
+#     -t ghcr.io/langfordkuo/reedblog-backend:dev --push .
+#
+# 数据全部落在 /data 卷：config.toml、SQLite 文件、uploads/、plugins/、themes/
+# 首次启动由 deploy/docker/entrypoint.sh 生成未安装态配置，浏览器走 /install 向导完成安装。
+
+# ---------- runtime ----------
+# 以下指令与仓库根 Dockerfile 的 runtime 阶段保持同步（唯一差别：二进制来源。
+# 那边 COPY --from=builder，这边 COPY 构建上下文的 prebuilt/<TARGETARCH>/）。
+# 改运行时行为（非 root / 健康检查 / 卷属主 / entrypoint 等）时请两份文件一起改。
+#
+# bookworm = glibc 2.36，满足 gnu 产物要求的 2.35；不用 alpine/musl（sqlx bundled SQLite 走 gnu 工具链）
+FROM debian:bookworm-slim AS runtime
+
+# buildx 自动注入的目标架构（amd64 / arm64），用来挑选对应二进制。
+# 必须放在 FROM 之后、COPY 之前：FROM 之前声明的 ARG 不进构建阶段，COPY 里会是空值。
+ARG TARGETARCH
+
+# ca-certificates：外呼 HTTPS（如 SMTP）；curl：HEALTHCHECK 探测
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# 非 root 运行：固定 uid/gid 10002。
+# /data 预建为该属主——空命名卷首次挂载会继承镜像内目录的属主，避免「卷属主 root，容器内写不进」
+RUN groupadd --gid 10002 reedblog \
+    && useradd --uid 10002 --gid 10002 --no-create-home --shell /usr/sbin/nologin reedblog \
+    && install -d -o reedblog -g reedblog -m 0755 /data
+
+# 二进制由 runner 预编译：prebuilt/amd64 或 prebuilt/arm64（对应 buildx 的 TARGETARCH）
+COPY prebuilt/${TARGETARCH}/reedblog-backend /app/reedblog-backend
+COPY deploy/docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+# 显式置执行位，不依赖构建上下文的文件权限（Windows 检出的仓库可能丢失 +x）
+RUN chmod 0755 /app/reedblog-backend /usr/local/bin/entrypoint.sh
+
+WORKDIR /app
+ENV REEDBLOG_CONFIG=/data/config.toml
+VOLUME ["/data"]
+EXPOSE 3000
+USER reedblog
+
+# 未安装态（GET /api/site/settings）返回 503 也算健康——安装前站点就是「未安装」，
+# 200（已安装）与 503 之外一律不健康。REEDBLOG_PORT 改端口时这里跟随。
+HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${REEDBLOG_PORT:-3000}/api/site/settings" | grep -qE '^(200|503)$' || exit 1
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

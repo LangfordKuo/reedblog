@@ -4,6 +4,10 @@ name: Docker
 #   - push tag v*       → 构建 linux/amd64 + linux/arm64 并推 GHCR（vX.Y.Z / X.Y / latest / sha-<短sha>）
 #   - push main / PR     → 只构建校验，不推送
 #   - workflow_dispatch  → 手动触发（同上：只有 tag ref 才推送）
+#
+# 后端镜像的构建路径：binaries job 先在 runner 上编出两个架构的二进制（amd64 原生 / arm64 交叉），
+# build job 再用 deploy/docker/Dockerfile.runtime 组装镜像——不在 QEMU 里跑 cargo，后端构建从
+# 三十多分钟降到几分钟（详见 binaries job 上方注释）。web 镜像维持原样（node 构建，双架构 ~4 分钟）。
 on:
   push:
     branches: [main]
@@ -38,20 +42,100 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # 关键提速点：在 runner 上原生/交叉编译两个架构的二进制，交给 build job 组装进镜像。
+  #   - 原路线（buildx 在 QEMU 里 cargo build）arm64 全量模拟，一次 ~36 分钟；
+  #   - 现在 amd64 原生编、arm64 用 apt 交叉工具链（与 release.yml 已验证的做法逐项一致），
+  #     Swatinem/rust-cache 缓存 backend/target 跨运行复用，改前端或复用缓存时几乎只剩增量编译。
+  binaries:
+    name: Build backend binaries (amd64 + arm64)
+    # 固定 22.04（glibc 2.35）而不是 ubuntu-latest（24.04 / glibc 2.39）：
+    # 运行时基础镜像是 debian:bookworm-slim（glibc 2.36），在新 glibc 上编出的二进制可能引用
+    # GLIBC_2.38/2.39 符号，进容器直接起不来。release.yml 的 Linux 产物同样固定在 22.04。
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # x86_64 是 runner 原生目标；aarch64 需要显式安装 std
+          targets: x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          # $workspace -> $target；实际缓存 backend/target（两个 target 的产物都在其下，一次缓存共用）
+          workspaces: "backend -> target"
+          # 与 release.yml 的 key 区分开，避免两条流水线互顶缓存
+          key: docker-backend-binaries
+
+      # aarch64 交叉编译：bundled SQLite 等 C 代码也要用交叉 gcc/ar（同 release.yml）
+      - name: Install aarch64 cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build binaries (release, locked)
+        working-directory: backend
+        env:
+          # 只对 aarch64 目标生效；x86_64 原生构建忽略这几个变量
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
+        run: |
+          set -euo pipefail
+          cargo build --release --locked --target x86_64-unknown-linux-gnu
+          cargo build --release --locked --target aarch64-unknown-linux-gnu
+
+      # 摆成 Dockerfile.runtime 认的 prebuilt/<TARGETARCH>/ 布局，并自检架构（防止交叉工具链没生效编出 x86 产物）
+      - name: Stage binaries for image assembly
+        run: |
+          set -euo pipefail
+          mkdir -p prebuilt/amd64 prebuilt/arm64
+          cp backend/target/x86_64-unknown-linux-gnu/release/reedblog-backend prebuilt/amd64/reedblog-backend
+          cp backend/target/aarch64-unknown-linux-gnu/release/reedblog-backend prebuilt/arm64/reedblog-backend
+          file prebuilt/amd64/reedblog-backend prebuilt/arm64/reedblog-backend
+          file prebuilt/amd64/reedblog-backend | grep -q 'x86-64' || { echo "架构自检失败：amd64 产物不是 x86-64"; exit 1; }
+          file prebuilt/arm64/reedblog-backend | grep -q 'aarch64' || { echo "架构自检失败：arm64 产物不是 aarch64"; exit 1; }
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-binaries
+          # 上传两个具体文件：artifact 内保留 amd64/、arm64/ 两级目录（下载到 prebuilt/ 后路径即可用）
+          path: |
+            prebuilt/amd64/reedblog-backend
+            prebuilt/arm64/reedblog-backend
+          retention-days: 3
+          if-no-files-found: error
+
   build:
     name: Build ${{ matrix.image }} (amd64 + arm64)
     runs-on: ubuntu-latest
+    # backend 需要 binaries 的产物；web 也一起等（job 级 needs 无法只对矩阵一项生效）
+    needs: [binaries]
     strategy:
       fail-fast: false
       matrix:
         include:
           - image: backend
-            file: ./Dockerfile
+            # CI 快路径：二进制已由 binaries job 编好，只做运行时组装
+            file: deploy/docker/Dockerfile.runtime
           - image: web
             file: ./frontend/Dockerfile
     steps:
       - uses: actions/checkout@v4
 
+      # 下载到 prebuilt/，正好对上 Dockerfile.runtime 的 COPY prebuilt/${TARGETARCH}/...
+      - name: Download backend binaries
+        if: matrix.image == 'backend'
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-binaries
+          path: prebuilt
+
+      # QEMU 仍要装：arm64 那条 runtime 阶段里的 apt-get 是在模拟架构下执行的。
+      # 但相比原来在 QEMU 里全量 cargo build，这里只剩装包和拷二进制，分钟级。
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -96,11 +180,19 @@ jobs:
 
   # 单架构 load 构建后在 runner 上真跑一遍：后端未安装态 503 → 安装 201；web 静态 200 + /api 反代可达。
   # 这是「镜像真能启动」的唯一自动化验证（多架构构建本身只证明能编译）。
+  # 后端同样用 binaries job 的 amd64 产物组装（冒烟里不再跑 cargo），断言与原来完全一致。
   smoke:
     name: Smoke test (backend + web, amd64)
     runs-on: ubuntu-latest
+    needs: [binaries]
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download backend binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-binaries
+          path: prebuilt
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
@@ -110,7 +202,7 @@ jobs:
           set -euo pipefail
           docker buildx build --load --platform linux/amd64 \
             --cache-from type=gha,scope=backend \
-            -t reedblog-backend:smoke -f Dockerfile .
+            -t reedblog-backend:smoke -f deploy/docker/Dockerfile.runtime .
           docker buildx build --load --platform linux/amd64 \
             --cache-from type=gha,scope=web \
             -t reedblog-web:smoke -f frontend/Dockerfile .

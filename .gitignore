@@ -13,3 +13,8 @@ uploads/
 # 前端
 frontend/node_modules/
 frontend/dist/
+
+# 后端镜像组装用的预编译产物（deploy/docker/Dockerfile.runtime 的构建输入）：
+# CI 由 .github/workflows/docker.yml 的 binaries job 生成；本机手工组装见 deploy/DOCKER.md 第 10 节。
+# 只用于喂给 docker 构建上下文，不进 git（但**不能**加进 .dockerignore）。
+/prebuilt/

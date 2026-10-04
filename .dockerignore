@@ -11,6 +11,7 @@
 .env.*.local
 
 # 本地产物与运行时数据（绝不进镜像）
+# 注意：不要排除 prebuilt/——CI 的后端镜像（deploy/docker/Dockerfile.runtime）靠它取预先编好的二进制
 backend/target
 backend/config.toml
 backend/*.db
