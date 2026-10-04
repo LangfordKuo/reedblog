@@ -343,3 +343,49 @@ docker tag ghcr.1ms.run/langfordkuo/reedblog:latest ghcr.io/langfordkuo/reedblog
 **已验证**：在匿名前提下（不带任何凭据）从加速站拉取三个镜像的 `latest` 与 `v0.3.0` manifest 均返回 200，
 且返回的是**同一个多架构清单**（`linux/amd64` + `linux/arm64`），与直连 ghcr.io 的内容一致。
 加速站走自己的 token 端点（`/openapi/v1/auth/token`），`docker pull` 会自动处理，无需手工配置。
+
+## 12. 宝塔面板 / 双层 Nginx 反代（套域名）
+
+`域名 → 宝塔 Nginx（80/443，TLS）→ 127.0.0.1:8080 → 容器内 Nginx → 静态站点 + /api → 容器内后端`
+
+功能上没问题（就是多一跳），但要按下面几处配置，否则会踩坑。
+
+**a) 反代配置（宝塔「网站 → 反向代理」里改）**
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    # ⚠️ 关键：不带这一行，所有访客在容器看来都是同一个 IP
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host  $host;
+    client_max_body_size 64m;    # 必须 ≥ 32m（后端上传上限；备份导入需要更大，按需 1024m）
+    proxy_read_timeout   300s;   # 备份导出/导入可能超过默认 60s，否则 504
+    proxy_buffering      off;    # 流式 zip 导出建议关缓冲
+}
+```
+
+**b) 三件事必须做**
+
+1. **容器端口只绑本机**：`docker run … -p 127.0.0.1:8080:80 …`。否则 `http://<服务器IP>:8080` 可绕过 HTTPS 直连。
+2. **后台把 `base_url` 设成 `https://你的域名`**（站点管理 → base_url）。推导链是
+   `站点设置 → config.toml [server] base_url → 请求头`，而容器内 Nginx 会把 `X-Forwarded-Proto`
+   按**容器内**的连接（http）写下去，所以不设 base_url 时 RSS / sitemap / OG 卡片 / 通知邮件里的
+   链接会变成 `http://…`（甚至 `127.0.0.1:8080`）。设了 base_url 就与代理头无关，最稳。
+3. **别在宝塔层开缓存 / 防盗链**：
+   - 开缓存会**破坏爬虫 UA 分流**（分流在容器内 Nginx 做，但缓存按 URI 命中，爬虫和真人会拿到同一份
+     内容 → 要么分享卡片失效，要么爬虫拿到 SPA）；
+   - 防盗链（Referer 校验）会让 `/api/uploads/*` 图片在编辑器/后台加载失败。
+
+**c) 其他说明**
+
+- 访客真实 IP：后端取 `X-Forwarded-For` **首项**（最早的客户端）→ 只要按 (a) 透传就是真 IP；
+  漏传时取容器内看到的上一层地址，**反滥用限流（同 IP+目标 60 秒 1 条、10 分钟 5 条）与登录失败退避
+  会把所有访客当成同一个人**，正常用户被误 429 / 误锁。
+- UA 分流本身不受双层代理影响（UA 原样透传），前提是 (b) 第 3 条。
+- 无需 WebSocket / Upgrade 头；gzip 两层都开也无害（内层压过的不会重复压）；
+  JWT 存 localStorage（不是 Cookie），所以没有 SameSite/Secure 相关配置。
+- 容器 HEALTHCHECK 探测的是容器内 80 端口，与宝塔无关；宝塔侧可另配自定义监控打 `https://域名/api/site/settings`。
