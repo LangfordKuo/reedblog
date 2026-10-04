@@ -139,6 +139,26 @@ The default bind address is `127.0.0.1`, suited to reverse-proxy setups; to expo
 it directly, change `[server] host` in config.toml. In production, supervise the
 backend with systemd or similar.
 
+## Docker deployment
+
+No Rust/Node/Nginx toolchain needed — the repo ships two images (backend, and
+Nginx/frontend) plus a compose file:
+
+```bash
+docker compose up -d --build
+# open http://localhost:8080 → first visit goes through the /install wizard
+```
+
+- All data lives in one named volume (`/data`: config.toml, SQLite, uploads, plugins, themes) —
+  removing containers does not lose data;
+- SQLite by default; MySQL via `--profile mysql`;
+- Images are published to GHCR: `ghcr.io/langfordkuo/reedblog-backend`,
+  `ghcr.io/langfordkuo/reedblog-web` (linux/amd64 + linux/arm64),
+  tags `vX.Y.Z` / `X.Y` / `latest` / `sha-<short-sha>`.
+
+Full guide (volumes and backups, switching to MySQL, environment variables, FAQ):
+[deploy/DOCKER.md](deploy/DOCKER.md).
+
 ## SEO / share metadata (crawler routing)
 
 Crawlers of WeChat / Twitter / Facebook / Slack never execute JS, so SPA runtime

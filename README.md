@@ -138,6 +138,23 @@ REEDBLOG_CONFIG=/opt/reedblog/config.toml /usr/local/bin/reedblog-backend
 `127.0.0.1`，适合反代部署；如需直接暴露，改 config.toml `[server] host`。
 生产建议再用 systemd 等进程管理器托管后端。
 
+## Docker 部署
+
+不想手工装 Rust/Node/Nginx？仓库自带两个镜像（后端 + Nginx/前端）与 compose 编排：
+
+```bash
+docker compose up -d --build
+# 打开 http://localhost:8080 → 首次访问走 /install 安装向导
+```
+
+- 全部数据在一个命名卷里（`/data`：config.toml、SQLite、uploads、plugins、themes），删容器不丢数据；
+- 默认 SQLite 单机，可选 `--profile mysql` 切 MySQL；
+- 镜像发到 GHCR：`ghcr.io/langfordkuo/reedblog-backend`、`ghcr.io/langfordkuo/reedblog-web`
+  （linux/amd64 + linux/arm64），tag `vX.Y.Z` / `X.Y` / `latest` / `sha-<短sha>`。
+
+完整说明（数据卷与备份、切 MySQL、环境变量、常见问题）见
+[deploy/DOCKER.md](deploy/DOCKER.md)。
+
 ## SEO / 分享元信息（爬虫分流）
 
 SPA 的运行时 meta 注入微信 / Twitter / Facebook / Slack 等抓取器**看不到**（它们不执行 JS），

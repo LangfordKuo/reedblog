@@ -41,6 +41,18 @@ cd C:\reedblog
 前端 `frontend-dist\` 可用 Nginx for Windows、Caddy 或任意静态服务器托管；
 开发/临时预览也可用 `npx serve frontend-dist --single`。
 
+## Docker（可选，最省事）
+
+仓库根目录自带 compose 编排（后端镜像 + Nginx/前端镜像），不用手工装 Nginx：
+
+```bash
+docker compose up -d --build
+# 打开 http://localhost:8080 → 首次访问走 /install 安装向导
+```
+
+数据全部落在 `reedblog-data` 卷（`/data`：config.toml、SQLite、uploads、plugins、themes）。
+切 MySQL、备份/恢复、GHCR 拉镜像直接跑等完整说明见 [DOCKER.md](DOCKER.md)。
+
 ## 注意
 
 - 数据库：SQLite（默认，文件路径在 `config.toml`）或 MySQL（安装向导里选）。SQLite 为**内置编译**，无需系统安装 sqlite。

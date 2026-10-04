@@ -1,0 +1,237 @@
+name: Docker
+
+# 触发：
+#   - push tag v*       → 构建 linux/amd64 + linux/arm64 并推 GHCR（vX.Y.Z / X.Y / latest / sha-<短sha>）
+#   - push main / PR     → 只构建校验，不推送
+#   - workflow_dispatch  → 手动触发（同上：只有 tag ref 才推送）
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    # 路径过滤只对分支推送生效；GitHub 对 tag 推送不评估 paths（tag 一定触发）
+    paths:
+      - "backend/**"
+      - "frontend/**"
+      - "deploy/docker/**"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "docker-compose.yml"
+      - ".github/workflows/docker.yml"
+  pull_request:
+    paths:
+      - "backend/**"
+      - "frontend/**"
+      - "deploy/docker/**"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "docker-compose.yml"
+      - ".github/workflows/docker.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+# 同一 ref（尤其同一 tag）串行，避免两个运行并发写同一组镜像 tag
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.image }} (amd64 + arm64)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: backend
+            file: ./Dockerfile
+          - image: web
+            file: ./frontend/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 只在 tag 构建时登录（main/PR 不推送，无需凭据）
+      - name: Log in to GHCR
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/langfordkuo/reedblog-${{ matrix.image }}
+          # latest 不用自动规则（避免 main 分支构建也打 latest），只在 tag 时显式加
+          flavor: latest=false
+          tags: |
+            type=ref,event=tag
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short,prefix=sha-
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          platforms: linux/amd64,linux/arm64
+          push: ${{ startsWith(github.ref, 'refs/tags/') }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # 不产出 attestation 清单，保持镜像 manifest 简单（老客户端也能直接 pull）
+          provenance: false
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  # 单架构 load 构建后在 runner 上真跑一遍：后端未安装态 503 → 安装 201；web 静态 200 + /api 反代可达。
+  # 这是「镜像真能启动」的唯一自动化验证（多架构构建本身只证明能编译）。
+  smoke:
+    name: Smoke test (backend + web, amd64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build images for smoke (amd64, --load)
+        run: |
+          set -euo pipefail
+          docker buildx build --load --platform linux/amd64 \
+            --cache-from type=gha,scope=backend \
+            -t reedblog-backend:smoke -f Dockerfile .
+          docker buildx build --load --platform linux/amd64 \
+            --cache-from type=gha,scope=web \
+            -t reedblog-web:smoke -f frontend/Dockerfile .
+
+      - name: Smoke test containers
+        run: |
+          set -euo pipefail
+
+          BACKEND_CT=reedblog-smoke-backend
+          BACKEND2_CT=reedblog-smoke-backend-web
+          WEB_CT=reedblog-smoke-web
+          NET=reedblog-smoke-net
+
+          dump_logs() {
+            echo "===== 失败诊断：容器日志 ====="
+            for c in "$BACKEND_CT" "$BACKEND2_CT" "$WEB_CT"; do
+              if docker inspect "$c" >/dev/null 2>&1; then
+                echo "----- docker logs $c -----"
+                docker logs "$c" 2>&1 || true
+              fi
+            done
+            echo "=============================="
+          }
+          cleanup() {
+            status=$?
+            if [ "$status" -ne 0 ]; then dump_logs; fi
+            docker rm -f "$BACKEND_CT" "$BACKEND2_CT" "$WEB_CT" >/dev/null 2>&1 || true
+            docker network rm "$NET" >/dev/null 2>&1 || true
+            docker volume rm reedblog-smoke-data reedblog-smoke-data2 >/dev/null 2>&1 || true
+            exit "$status"
+          }
+          trap cleanup EXIT
+
+          # 轮询等待 URL 可连（返回 000 说明还没起来）
+          wait_http() {
+            url="$1"
+            for _ in $(seq 1 60); do
+              code="$(curl -s -o /dev/null -w '%{http_code}' "$url" || true)"
+              if [ -n "$code" ] && [ "$code" != "000" ]; then return 0; fi
+              sleep 1
+            done
+            echo "等待超时: $url"
+            return 1
+          }
+
+          # 轮询等待 URL 返回期望状态码之一（用于「反代链路两端都就绪」的判定）
+          wait_code() {
+            url="$1"
+            shift
+            for _ in $(seq 1 60); do
+              code="$(curl -s -o /dev/null -w '%{http_code}' "$url" || true)"
+              for want in "$@"; do
+                if [ "$code" = "$want" ]; then return 0; fi
+              done
+              sleep 1
+            done
+            echo "等待超时: $url（最后一次状态码 $code，期望 $*）"
+            return 1
+          }
+
+          # ---------- 1) 后端：未安装态 503 → 安装 201 ----------
+          docker network create "$NET" >/dev/null
+          docker volume create reedblog-smoke-data >/dev/null
+          docker run -d --name "$BACKEND_CT" --network "$NET" --network-alias backend \
+            -p 127.0.0.1:3010:3000 -v reedblog-smoke-data:/data reedblog-backend:smoke
+
+          wait_http http://127.0.0.1:3010/api/site/settings
+          code="$(curl -s -o /tmp/reedblog-settings.json -w '%{http_code}' http://127.0.0.1:3010/api/site/settings)"
+          echo "未安装态 GET /api/site/settings -> $code（期望 503）body=$(cat /tmp/reedblog-settings.json)"
+          [ "$code" = "503" ] || { echo "冒烟失败：期望 503(not_installed)，实际 $code"; exit 1; }
+
+          code="$(curl -s -o /tmp/reedblog-install.json -w '%{http_code}' -X POST \
+            http://127.0.0.1:3010/api/install -H 'Content-Type: application/json' \
+            -d '{"db_type":"sqlite","sqlite_path":"/data/reedblog.db","site":{"title":"smoke"},"admin":{"username":"admin","password":"smoke-password-123"}}')"
+          echo "POST /api/install -> $code（期望 201）body=$(cat /tmp/reedblog-install.json)"
+          [ "$code" = "201" ] || { echo "冒烟失败：安装期望 201，实际 $code"; exit 1; }
+
+          code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3010/api/site/settings)"
+          echo "已安装 GET /api/site/settings -> $code（期望 200）"
+          [ "$code" = "200" ] || { echo "冒烟失败：安装后期望 200，实际 $code"; exit 1; }
+
+          # 安装结果落到数据卷（config.toml + SQLite）——容器重启后仍在
+          docker stop "$BACKEND_CT" >/dev/null
+          docker rm "$BACKEND_CT" >/dev/null
+
+          # ---------- 2) Web：静态 200 + /api 反代 + UA 分流 ----------
+          # 重新起一个未安装态后端（同网络、服务别名 backend），验证 web 镜像的反代与分流
+          docker volume create reedblog-smoke-data2 >/dev/null
+          docker run -d --name "$BACKEND2_CT" --network "$NET" --network-alias backend \
+            -v reedblog-smoke-data2:/data reedblog-backend:smoke
+          docker run -d --name "$WEB_CT" --network "$NET" -p 127.0.0.1:8080:80 \
+            -e BACKEND_UPSTREAM=backend:3000 reedblog-web:smoke
+
+          wait_http http://127.0.0.1:8080/
+          # 反代链路就绪：后端未安装态经 Nginx 返回 503（排除 502=后端还没起来）
+          wait_code http://127.0.0.1:8080/api/site/settings 503 200
+
+          body="$(curl -s http://127.0.0.1:8080/)"
+          code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/)"
+          echo "GET / -> $code；index.html 标记: $(printf '%s' "$body" | grep -c 'id=\"root\"')"
+          [ "$code" = "200" ] || { echo "冒烟失败：web 首页期望 200，实际 $code"; exit 1; }
+          printf '%s' "$body" | grep -q 'id="root"' || { echo "冒烟失败：首页不是构建后的 index.html"; exit 1; }
+
+          code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/site/settings)"
+          echo "经反代 GET /api/site/settings -> $code（后端未安装态，期望 503；200 也算通过）"
+          { [ "$code" = "503" ] || [ "$code" = "200" ]; } || { echo "冒烟失败：/api 反代不可达（$code）"; exit 1; }
+
+          code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/robots.txt)"
+          echo "经反代 GET /robots.txt -> $code（期望 200/503 之外仍是后端响应，非静态 404）"
+          [ "$code" != "404" ] || { echo "冒烟失败：/robots.txt 未反代到后端"; exit 1; }
+
+          human="$(curl -s -o /tmp/reedblog-human.html -w '%{http_code}' \
+            -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0' http://127.0.0.1:8080/posts/smoke)"
+          echo "真人 UA GET /posts/smoke -> $human（期望 200 SPA）"
+          [ "$human" = "200" ] || { echo "冒烟失败：真人流量应拿 SPA，实际 $human"; exit 1; }
+          grep -q 'id="root"' /tmp/reedblog-human.html || { echo "冒烟失败：真人流量不是 SPA index.html"; exit 1; }
+
+          bot="$(curl -s -o /tmp/reedblog-bot.html -w '%{http_code}' \
+            -A 'Twitterbot/1.0' http://127.0.0.1:8080/posts/smoke)"
+          echo "爬虫 UA GET /posts/smoke -> $bot（未安装后端，期望 503 且不是 SPA）"
+          [ "$bot" = "503" ] || { echo "冒烟失败：爬虫应被分流到后端（期望 503），实际 $bot"; exit 1; }
+          grep -q 'id="root"' /tmp/reedblog-bot.html && { echo "冒烟失败：爬虫拿到了 SPA（UA 分流失效）"; exit 1; }
+
+          echo "✅ 冒烟测试全部通过"

@@ -1,0 +1,90 @@
+# reedblog 生产编排：backend（Rust/Axum）+ web（Nginx 托管前端 + /api 反代），可选 MySQL。
+#
+# 快速开始：
+#   docker compose up -d --build
+#   浏览器打开 http://localhost:8080 → 首次访问进入 /install 安装向导（SQLite 单机模式，无需其他依赖）
+#
+# 关键事实：
+#   - 默认端口 8080（web/Nginx）。后端只在 compose 网络内以 backend:3000 提供，不对宿主机暴露。
+#   - 所有数据在一个命名卷 reedblog-data（容器内 /data）里：config.toml、SQLite 文件、
+#     uploads/、plugins/、themes/。删卷 = 删站，备份见 deploy/DOCKER.md。
+#   - 默认不启 MySQL；启用见下方 mysql 服务与 .env.example，命令为
+#     docker compose --profile mysql up -d。
+#   - 升级：docker compose pull && docker compose up -d（用本地源码构建则 --build）。
+#   - 备份数据卷：docker run --rm -v reedblog-data:/data -v "$PWD":/backup alpine \
+#       tar czf /backup/reedblog-data-$(date +%F).tgz -C /data .
+#   - 需要 Docker Compose v2.20+（backend 的 depends_on.required 字段）。
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # 与 GHCR 上的镜像同名：docker compose pull 可直接拉发布版，up --build 则用本地源码构建
+    image: ghcr.io/langfordkuo/reedblog-backend:latest
+    restart: unless-stopped
+    environment:
+      # 数据库：默认 SQLite（文件落在数据卷里）；启用 mysql profile 时把 .env 的
+      # REEDBLOG_DB_TYPE 改成 mysql，安装向导里选 MySQL 并填 host=mysql（其余与 .env 一致）
+      REEDBLOG_DB_TYPE: ${REEDBLOG_DB_TYPE:-sqlite}
+      REEDBLOG_SQLITE_PATH: /data/reedblog.db
+      # 容器内固定 3000；web 的 BACKEND_UPSTREAM 也指向 3000，改这里要同步改
+      REEDBLOG_PORT: "3000"
+      # MySQL（仅当 REEDBLOG_DB_TYPE=mysql 时生效）；MYSQL_* 与 mysql 服务共用同一组 .env 变量
+      REEDBLOG_MYSQL_HOST: ${MYSQL_HOST:-mysql}
+      REEDBLOG_MYSQL_PORT: ${MYSQL_PORT:-3306}
+      REEDBLOG_MYSQL_USER: ${MYSQL_USER:-reedblog}
+      REEDBLOG_MYSQL_PASSWORD: ${MYSQL_PASSWORD:-reedblog-change-me}
+      REEDBLOG_MYSQL_DATABASE: ${MYSQL_DATABASE:-reedblog}
+      # 跨域白名单（同源反代不需要；多个来源逗号分隔）
+      REEDBLOG_CORS_ORIGINS: ${REEDBLOG_CORS_ORIGINS:-}
+    volumes:
+      - reedblog-data:/data
+    # 本机调试可在宿主机直连后端时取消注释
+    # ports:
+    #   - "3000:3000"
+    # 健康检查复用镜像内置 HEALTHCHECK（GET /api/site/settings，200/503 均健康）
+    depends_on:
+      mysql:
+        condition: service_healthy
+        # mysql 只在 --profile mysql 下启用；required: false 让默认（SQLite）模式下该依赖自动忽略
+        required: false
+
+  web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    image: ghcr.io/langfordkuo/reedblog-web:latest
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    environment:
+      # Nginx 反代目标，不带 http:// 前缀（模板里拼 http://${BACKEND_UPSTREAM}）
+      BACKEND_UPSTREAM: backend:3000
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  # 可选 MySQL（docker compose --profile mysql up -d；同时把 .env 的 REEDBLOG_DB_TYPE 设为 mysql）
+  mysql:
+    image: mysql:8
+    profiles: ["mysql"]
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-reedblog-root-change-me}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-reedblog}
+      MYSQL_USER: ${MYSQL_USER:-reedblog}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-reedblog-change-me}
+    volumes:
+      - reedblog-mysql:/var/lib/mysql
+    healthcheck:
+      # $$ 是 compose 转义，容器内取 $MYSQL_ROOT_PASSWORD
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  reedblog-data:
+  reedblog-mysql:
