@@ -7,10 +7,17 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { api, errorMessage } from "@/lib/api"
 import { loadSiteSettings } from "@/lib/site"
-import type { SiteSettingsAdmin } from "@/lib/types"
+import type { CommentModeration, SiteSettingsAdmin } from "@/lib/types"
 
 /** /admin/settings：站点管理（站点名称/副标题/描述/备案号/页脚文字/每页文章数/base_url） */
 export default function AdminSettingsPage() {
@@ -29,6 +36,8 @@ export default function AdminSettingsPage() {
   // 反滥用（契约「反滥用」条款）：仅后台可见，公开接口不返回
   const [blockedKeywords, setBlockedKeywords] = useState("")
   const [maxLinks, setMaxLinks] = useState("3")
+  // 评论审核方式（契约「评论审核方式」条款）：post=先发后审（默认）/ pre=先审后发
+  const [commentModeration, setCommentModeration] = useState<CommentModeration>("post")
 
   useEffect(() => {
     document.title = "站点管理 · reedblog"
@@ -45,6 +54,7 @@ export default function AdminSettingsPage() {
         setOgImage(s.og_image)
         setBlockedKeywords(s.comment_blocked_keywords)
         setMaxLinks(String(s.comment_max_links))
+        setCommentModeration(s.comment_moderation)
       })
       .catch((e) => setLoadError(errorMessage(e)))
       .finally(() => setLoading(false))
@@ -99,6 +109,7 @@ export default function AdminSettingsPage() {
         og_image: ogImage.trim(),
         comment_blocked_keywords: blockedKeywords,
         comment_max_links: maxLinksNum,
+        comment_moderation: commentModeration,
       })
       // 回显服务端规范化后的值（trim / base_url 去尾斜杠）
       setTitle(saved.title)
@@ -111,6 +122,7 @@ export default function AdminSettingsPage() {
       setOgImage(saved.og_image)
       setBlockedKeywords(saved.comment_blocked_keywords)
       setMaxLinks(String(saved.comment_max_links))
+      setCommentModeration(saved.comment_moderation)
       // 刷新前台站点设置的模块级缓存（同标签页回前台立即生效）
       loadSiteSettings(true).catch(() => {})
       toast.success("站点设置已保存")
@@ -255,6 +267,37 @@ export default function AdminSettingsPage() {
               <p className="text-xs text-muted-foreground">
                 分享到社媒/聊天工具的卡片兜底图；留空则用文章正文第一张图，都没有时不输出
                 og:image
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">评论</CardTitle>
+            <CardDescription>
+              新评论/留言的审核方式；与下方反滥用规则相互独立，反滥用判定不受此设置影响
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+            <div className="grid gap-2">
+              <Label htmlFor="comment-moderation">评论审核方式</Label>
+              <Select
+                value={commentModeration}
+                onValueChange={(v) => setCommentModeration(v as CommentModeration)}
+              >
+                <SelectTrigger id="comment-moderation" className="w-full max-w-md">
+                  <SelectValue placeholder="请选择" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="post">
+                    先发后审（评论立即公开，可在后台隐藏）
+                  </SelectItem>
+                  <SelectItem value="pre">先审后发（评论需后台通过后才公开）</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                切换只影响之后的新评论，不会改动已存在的评论
               </p>
             </div>
           </CardContent>

@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useState } from "react"
 import { Link, useSearchParams } from "react-router-dom"
-import { CornerDownRightIcon, EyeIcon, EyeOffIcon, Loader2Icon, Trash2Icon } from "lucide-react"
+import {
+  CheckIcon,
+  CornerDownRightIcon,
+  EyeIcon,
+  EyeOffIcon,
+  Loader2Icon,
+  Trash2Icon,
+} from "lucide-react"
 import { toast } from "sonner"
 
 import { ConfirmDialog } from "@/components/confirm-dialog"
@@ -37,9 +44,22 @@ export default function AdminCommentsPage() {
   const [togglingId, setTogglingId] = useState<number | null>(null)
   const [deleting, setDeleting] = useState<CommentAdmin | null>(null)
   const [deleteLoading, setDeleteLoading] = useState(false)
+  // 待审计数（契约「评论审核方式」：不加 SiteStats 字段，用管理接口 status=pending 查询）
+  const [pendingCount, setPendingCount] = useState(0)
+  const [approveAllOpen, setApproveAllOpen] = useState(false)
+  const [approveAllLoading, setApproveAllLoading] = useState(false)
+
+  /** 刷新待审条数（顶部提示与「全部通过」按钮显示条件） */
+  const refreshPendingCount = useCallback(() => {
+    api.admin
+      .comments({ status: "pending", page: 1, per_page: 1 })
+      .then((d) => setPendingCount(d.total))
+      .catch(() => {})
+  }, [])
 
   const load = useCallback(() => {
     setLoading(true)
+    refreshPendingCount()
     api.admin
       .comments({ status, page, per_page: PER_PAGE })
       .then((d) => {
@@ -48,7 +68,7 @@ export default function AdminCommentsPage() {
       })
       .catch((e) => setError(errorMessage(e)))
       .finally(() => setLoading(false))
-  }, [status, page])
+  }, [status, page, refreshPendingCount])
 
   useEffect(load, [load])
 
@@ -77,6 +97,57 @@ export default function AdminCommentsPage() {
     }
   }
 
+  /**
+   * 后台「通过」待审评论（契约「评论审核方式」）：PUT {status:"approved"}，
+   * 复用既有改状态端点；通过时不发额外邮件，公开列表/计数实时生效。
+   */
+  const approve = async (c: CommentAdmin) => {
+    setTogglingId(c.id)
+    try {
+      const updated = await api.admin.updateComment(c.id, "approved")
+      if (status === "pending") {
+        load() // 待审筛选下通过后该行应移出列表
+      } else {
+        setData((prev) =>
+          prev
+            ? { ...prev, items: prev.items.map((it) => (it.id === updated.id ? updated : it)) }
+            : prev,
+        )
+      }
+      refreshPendingCount()
+      toast.success("评论已通过")
+    } catch (err) {
+      toast.error(errorMessage(err))
+    } finally {
+      setTogglingId(null)
+    }
+  }
+
+  /** 「全部通过」（加分项）：二次确认后分页拉取全部待审并逐条通过，循环直至清空 */
+  const approveAll = async () => {
+    setApproveAllLoading(true)
+    let approved = 0
+    try {
+      // 每轮取第一页最多 100 条：通过后即脱离 pending 筛选，循环直至没有剩余
+      for (;;) {
+        const d = await api.admin.comments({ status: "pending", page: 1, per_page: 100 })
+        if (d.items.length === 0) break
+        for (const it of d.items) {
+          await api.admin.updateComment(it.id, "approved")
+          approved += 1
+        }
+      }
+      toast.success(approved > 0 ? `已通过 ${approved} 条待审评论` : "没有待审评论")
+      setApproveAllOpen(false)
+      load()
+    } catch (err) {
+      toast.error(`操作中断：${errorMessage(err)}`)
+      load()
+    } finally {
+      setApproveAllLoading(false)
+    }
+  }
+
   const handleDelete = async () => {
     if (!deleting) return
     setDeleteLoading(true)
@@ -95,9 +166,26 @@ export default function AdminCommentsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-xl font-bold">评论管理</h1>
-        <p className="text-sm text-muted-foreground">共 {data?.total ?? 0} 条评论</p>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-bold">评论管理</h1>
+          <p className="text-sm text-muted-foreground">共 {data?.total ?? 0} 条评论</p>
+        </div>
+        {pendingCount > 0 && (
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => updateParams({ status: "pending", page: null })}
+            >
+              待审核 {pendingCount} 条
+            </Button>
+            <Button size="sm" onClick={() => setApproveAllOpen(true)}>
+              <CheckIcon className="size-4" />
+              全部通过
+            </Button>
+          </div>
+        )}
       </div>
 
       <Tabs
@@ -106,6 +194,7 @@ export default function AdminCommentsPage() {
       >
         <TabsList>
           <TabsTrigger value="all">全部</TabsTrigger>
+          <TabsTrigger value="pending">待审核</TabsTrigger>
           <TabsTrigger value="approved">已展示</TabsTrigger>
           <TabsTrigger value="hidden">已隐藏</TabsTrigger>
         </TabsList>
@@ -196,7 +285,12 @@ export default function AdminCommentsPage() {
                       {formatDateTime(c.created_at)}
                     </TableCell>
                     <TableCell>
-                      {c.status === "approved" ? (
+                      {c.status === "pending" ? (
+                        // 待审醒目标记（契约「评论审核方式」）
+                        <Badge className="border-amber-300 bg-amber-50 text-amber-700">
+                          待审核
+                        </Badge>
+                      ) : c.status === "approved" ? (
                         <Badge className="border-emerald-200 bg-emerald-50 text-emerald-700">
                           已展示
                         </Badge>
@@ -208,22 +302,39 @@ export default function AdminCommentsPage() {
                     </TableCell>
                     <TableCell>
                       <div className="flex justify-end gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          disabled={togglingId === c.id}
-                          aria-label={c.status === "approved" ? "隐藏" : "恢复"}
-                          title={c.status === "approved" ? "隐藏" : "恢复展示"}
-                          onClick={() => void toggleStatus(c)}
-                        >
-                          {togglingId === c.id ? (
-                            <Loader2Icon className="animate-spin" />
-                          ) : c.status === "approved" ? (
-                            <EyeOffIcon />
-                          ) : (
-                            <EyeIcon />
-                          )}
-                        </Button>
+                        {c.status === "pending" ? (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            disabled={togglingId === c.id}
+                            aria-label="通过"
+                            title="通过审核"
+                            onClick={() => void approve(c)}
+                          >
+                            {togglingId === c.id ? (
+                              <Loader2Icon className="animate-spin" />
+                            ) : (
+                              <CheckIcon />
+                            )}
+                          </Button>
+                        ) : (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            disabled={togglingId === c.id}
+                            aria-label={c.status === "approved" ? "隐藏" : "恢复"}
+                            title={c.status === "approved" ? "隐藏" : "恢复展示"}
+                            onClick={() => void toggleStatus(c)}
+                          >
+                            {togglingId === c.id ? (
+                              <Loader2Icon className="animate-spin" />
+                            ) : c.status === "approved" ? (
+                              <EyeOffIcon />
+                            ) : (
+                              <EyeIcon />
+                            )}
+                          </Button>
+                        )}
                         <Button
                           variant="ghost"
                           size="icon"
@@ -251,6 +362,16 @@ export default function AdminCommentsPage() {
           onChange={(p) => updateParams({ page: p <= 1 ? null : String(p) })}
         />
       )}
+
+      {/* 「全部通过」二次确认（契约「评论审核方式」；操作会公开全部待审评论） */}
+      <ConfirmDialog
+        open={approveAllOpen}
+        onOpenChange={(o) => !o && setApproveAllOpen(false)}
+        title="全部通过"
+        description={`确定通过全部 ${pendingCount} 条待审评论吗？通过后它们会立即在公开页面显示。`}
+        loading={approveAllLoading}
+        onConfirm={approveAll}
+      />
 
       <ConfirmDialog
         open={deleting !== null}

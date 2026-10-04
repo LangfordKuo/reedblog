@@ -363,6 +363,59 @@ pub struct CommentNotice {
     pub content: String,
     /// 楼中楼回复（parent_id 非空）
     pub is_reply: bool,
+    /// 落库状态为 pending（comment_moderation=pre）：文案改为「待审核」口径
+    /// （契约「评论审核方式」「邮件通知」；post 模式恒 false）
+    pub pending: bool,
+}
+
+/// 评论通知的主题与正文构造（纯函数，便于单测；契约「邮件通知」条款）：
+/// - post 模式（pending=false）：沿用既有文案——主题 `[{站名}] 新评论：{标题}`，
+///   正文含评论者/内容/后台评论管理链接；
+/// - pre 模式（pending=true）：主题 `[{站名}] 新评论（待审核）：{标题}`，正文首行明示
+///   「需审核通过后才对访客可见」，并给出待审列表链接（不发「已发表」口径）。
+/// 后台「通过」时不调用本函数（不发额外邮件）。
+pub fn comment_notice_content(
+    site_title: &str,
+    base: &str,
+    target_label: &str,
+    title: &str,
+    url: &str,
+    notice: &CommentNotice,
+) -> (String, String) {
+    let kind = if notice.is_reply {
+        "新回复"
+    } else {
+        "新评论"
+    };
+    if notice.pending {
+        let subject = format!("[{site_title}] {kind}（待审核）：{title}");
+        let body = format!(
+            "站点「{site_title}」收到{kind}，需审核通过后才对访客可见。\n\n\
+             {target_label}：{title}\n\
+             链接：{url}\n\n\
+             评论者：{author}\n\
+             内容：\n{content}\n\n\
+             ---\n\
+             审核链接：{base}/admin/comments?status=pending\n",
+            author = notice.author_name,
+            content = notice.content,
+        );
+        (subject, body)
+    } else {
+        let subject = format!("[{site_title}] {kind}：{title}");
+        let body = format!(
+            "站点「{site_title}」收到{kind}。\n\n\
+             {target_label}：{title}\n\
+             链接：{url}\n\n\
+             评论者：{author}\n\
+             内容：\n{content}\n\n\
+             ---\n\
+             后台评论管理：{base}/admin/comments\n",
+            author = notice.author_name,
+            content = notice.content,
+        );
+        (subject, body)
+    }
 }
 
 /// 评论创建成功后的通知入口：只做 clone + spawn，立即返回（绝不阻塞评论请求）
@@ -410,29 +463,14 @@ async fn notify_comment(
         "posts"
     };
     let url = format!("{base}/{path}/{}", urlencoding::encode(&notice.slug));
-    let kind = if notice.is_reply {
-        "新回复"
-    } else {
-        "新评论"
-    };
     let target_label = if notice.target_type == "page" {
         "页面"
     } else {
         "文章"
     };
-    let subject = format!("[{}] {kind}：{title}", site.title);
-    let body = format!(
-        "站点「{site_title}」收到{kind}。\n\n\
-         {target_label}：{title}\n\
-         链接：{url}\n\n\
-         评论者：{author}\n\
-         内容：\n{content}\n\n\
-         ---\n\
-         后台评论管理：{base}/admin/comments\n",
-        site_title = site.title,
-        author = notice.author_name,
-        content = notice.content,
-    );
+    // 文案由纯函数产出：pre 模式（pending）标明「待审核」并给出待审链接
+    let (subject, body) =
+        comment_notice_content(&site.title, &base, target_label, &title, &url, &notice);
     send(state, &smtp, &password, &subject, &body).await
 }
 
@@ -557,6 +595,77 @@ mod tests {
         let mut s = base();
         s.username = String::new();
         assert!(readiness(&s, "").is_ok());
+    }
+
+    fn notice(pending: bool, is_reply: bool) -> CommentNotice {
+        CommentNotice {
+            target_type: "post".to_string(),
+            target_id: 1,
+            slug: "hello".to_string(),
+            author_name: "甲".to_string(),
+            content: "内容正文".to_string(),
+            is_reply,
+            pending,
+        }
+    }
+
+    /// 邮件文案差异（契约「评论审核方式」/「邮件通知」）：post 沿用旧文案，
+    /// pre 标明「待审核」+ 待审链接、不含「已发表」口径
+    #[test]
+    fn comment_notice_content_post_and_pre_modes() {
+        let n = notice(false, false);
+        let (subject, body) = comment_notice_content(
+            "我的博客",
+            "https://blog.example.com",
+            "文章",
+            "标题A",
+            "https://blog.example.com/posts/hello",
+            &n,
+        );
+        assert_eq!(subject, "[我的博客] 新评论：标题A");
+        assert!(body.contains("评论者：甲"), "{body}");
+        assert!(body.contains("内容正文"), "{body}");
+        assert!(
+            body.contains("后台评论管理：https://blog.example.com/admin/comments"),
+            "{body}"
+        );
+        assert!(
+            !body.contains("待审核"),
+            "post 模式不得出现待审核口径：{body}"
+        );
+
+        let n = notice(true, false);
+        let (subject, body) = comment_notice_content(
+            "我的博客",
+            "https://blog.example.com",
+            "文章",
+            "标题A",
+            "https://blog.example.com/posts/hello",
+            &n,
+        );
+        assert_eq!(subject, "[我的博客] 新评论（待审核）：标题A");
+        assert!(body.contains("需审核通过后才对访客可见"), "{body}");
+        assert!(
+            body.contains("审核链接：https://blog.example.com/admin/comments?status=pending"),
+            "{body}"
+        );
+        assert!(
+            !body.contains("后台评论管理") && !body.contains("已发表"),
+            "pre 模式不得发「已发表」口径：{body}"
+        );
+
+        // 楼中楼回复：kind 换「新回复」，待审核标记保留
+        let n = notice(true, true);
+        let (subject, body) = comment_notice_content(
+            "我的博客",
+            "https://blog.example.com",
+            "页面",
+            "留言板",
+            "https://blog.example.com/pages/guestbook",
+            &n,
+        );
+        assert_eq!(subject, "[我的博客] 新回复（待审核）：留言板");
+        assert!(body.contains("需审核通过后才对访客可见"), "{body}");
     }
 
     #[test]

@@ -21,8 +21,8 @@ use crate::views::{client_ip, has_bearer, is_bot_ua};
 use super::helpers::{
     check_comment_gate, create_comment_pipeline, derive_excerpt, escape_like, fetch_post_tags,
     honeypot_comment, is_unique_violation, make_snippet, md_to_plain_text, render_markdown,
-    row_to_comment_pub, split_search_terms, CommentGate, PUBLIC_COMMENT_COLUMNS,
-    PUBLIC_COMMENT_FROM, PUBLIC_COMMENT_THREAD_FILTER, VISIBLE_POST_SQL,
+    row_to_comment_pub, split_search_terms, CommentGate, COMMENT_STATUS_PENDING,
+    PUBLIC_COMMENT_COLUMNS, PUBLIC_COMMENT_FROM, PUBLIC_COMMENT_THREAD_FILTER, VISIBLE_POST_SQL,
 };
 
 /// 把文章行（列表/详情共用列集）转成 PostPublic
@@ -63,9 +63,10 @@ async fn row_to_post_public(pool: &AnyPool, r: &AnyRow) -> ApiResult<PostPublic>
 }
 
 // content_md 仅用于 excerpt 为空时推导摘要，不出现在 PostPublic 响应里（契约：列表不含 content_md）
-// comment_count 口径与公开评论列表一致（契约「评论回复」条款）：只统计前台可见评论——
-// approved、target_type='post'（post_id 列复用为通用目标 id，须防页面留言串号）、
-// 且线程可见（hidden 顶级评论的子回复不计；线程内所有 visible 评论都计数）
+// comment_count 口径与公开评论列表一致（契约「评论回复」「评论审核方式」条款）：
+// 只统计前台可见评论——approved、target_type='post'（post_id 列复用为通用目标 id，
+// 须防页面留言串号）、且线程可见（hidden/pending 顶级评论的子回复不计；
+// 线程内所有 visible 评论都计数；pending 与 hidden 同口径一律不计）
 // is_sticky 为置顶标记（契约「文章置顶与定时发布」条款，2026-10-03 新增）
 // view_count / likes（契约「浏览量与点赞」条款）：likes 为 post_likes 子查询计数——
 // 走 (post_id, liker_key) UNIQUE 索引最左前缀，文章量小，双方言性能可接受
@@ -604,10 +605,13 @@ pub async fn list_comments(
     Ok(Json(rows.iter().map(row_to_comment_pub).collect()))
 }
 
-/// POST /api/posts/:slug/comments → 201 CommentPub（先发后审：创建即 approved）
+/// POST /api/posts/:slug/comments → 201 CommentPub
+/// （初始 status 由站点设置 comment_moderation 决定，契约「评论审核方式」：
+/// post=创建即 approved / pre=创建为 pending）
 ///
 /// 反滥用闸门（契约「反滥用」条款）：蜜罐（假成功不落库）→ 黑名单/链接数（403
-/// comment_rejected）→ 限流（429 too_many_requests + Retry-After）→ 通过后走下面的管线。
+/// comment_rejected）→ 限流（429 too_many_requests + Retry-After）→ 通过后走下面的管线
+/// （闸门顺序与行为不因审核模式改变）。
 /// 走评论共用创建管线（helpers::create_comment_pipeline）：body 可选 parent_id
 /// （回复/楼中楼），父评论校验与两级归一化、comment.before_create 钩子链
 /// （block → 403 comment_blocked，ctx 带 parent_id/reply_to_id）见契约「评论回复」条款。
@@ -656,7 +660,8 @@ pub async fn create_comment(
     )
     .await?;
     // 邮件通知（契约「邮件通知」条款）：写库成功、钩子链之后触发，发送在后台任务中异步
-    // 完成（失败只记日志），绝不影响本响应的形状与时延
+    // 完成（失败只记日志），绝不影响本响应的形状与时延；pre 模式的「待审核」文案由
+    // pending 标记驱动（通过审核时不发额外邮件）
     crate::mailer::spawn_comment_notification(
         &state,
         &headers,
@@ -664,12 +669,13 @@ pub async fn create_comment(
             target_type: "post".to_string(),
             target_id: post_id,
             slug: slug.clone(),
-            author_name: created.author_name.clone(),
-            content: created.content.clone(),
-            is_reply: created.parent_id.is_some(),
+            author_name: created.comment.author_name.clone(),
+            content: created.comment.content.clone(),
+            is_reply: created.comment.parent_id.is_some(),
+            pending: created.status == COMMENT_STATUS_PENDING,
         },
     );
-    Ok((StatusCode::CREATED, Json(created)))
+    Ok((StatusCode::CREATED, Json(created.comment)))
 }
 
 /// GET /api/tags → [Tag]（post_count 只统计公开可见文章：published + 到点的 scheduled）

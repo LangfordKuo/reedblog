@@ -2,7 +2,7 @@
 //! - GET /api/pages            → [PageSummary]（仅 enabled；前台顶栏导航数据源）
 //! - GET /api/pages/:slug      → PageDetail（停用/不存在 404；content_html 走文章同款钩子管线实时渲染）
 //! - GET/POST /api/pages/:slug/comments → 留言板留言（仅 kind=message_board 的启用页面；
-//!   留言 = target_type='page' 的评论，复用评论管线：先发后审 + comment.before_create 钩子）
+//!   留言 = target_type='page' 的评论，复用评论管线：审核方式随站点设置 + comment.before_create 钩子）
 
 use axum::extract::{ConnectInfo, Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -20,8 +20,8 @@ use crate::state::{require_pool, AppState};
 
 use super::helpers::{
     check_comment_gate, create_comment_pipeline, honeypot_comment, render_markdown,
-    row_to_comment_pub, CommentGate, PUBLIC_COMMENT_COLUMNS, PUBLIC_COMMENT_FROM,
-    PUBLIC_COMMENT_THREAD_FILTER,
+    row_to_comment_pub, CommentGate, COMMENT_STATUS_PENDING, PUBLIC_COMMENT_COLUMNS,
+    PUBLIC_COMMENT_FROM, PUBLIC_COMMENT_THREAD_FILTER,
 };
 use crate::views::client_ip;
 
@@ -118,10 +118,13 @@ pub async fn list_page_comments(
     Ok(Json(rows.iter().map(row_to_comment_pub).collect()))
 }
 
-/// POST /api/pages/:slug/comments → 201 CommentPub（先发后审：创建即 approved）
+/// POST /api/pages/:slug/comments → 201 CommentPub
+/// （初始 status 由站点设置 comment_moderation 决定，契约「评论审核方式」；
+/// 与文章评论共用同一处判定）
 ///
 /// 反滥用闸门（契约「反滥用」条款）与文章评论同口径：蜜罐（201 假成功不落库）→
-/// 黑名单/链接数（403 comment_rejected）→ 限流（429 + Retry-After）→ 通过后走管线。
+/// 黑名单/链接数（403 comment_rejected）→ 限流（429 + Retry-After）→ 通过后走管线
+/// （闸门顺序与行为不因审核模式改变）。
 /// 与文章评论同一条创建管线（helpers::create_comment_pipeline）：必填校验 →
 /// 父留言校验与两级归一化（body 可选 parent_id）→ comment.before_create 钩子链
 /// （block → 403 comment_blocked；ctx.post_slug = 页面 slug）→ 插入 target_type='page' 的评论行。
@@ -169,7 +172,8 @@ pub async fn create_page_comment(
         "留言被插件拦截",
     )
     .await?;
-    // 邮件通知（契约「邮件通知」条款）：页面留言与文章评论同一套异步发送，绝不阻塞响应
+    // 邮件通知（契约「邮件通知」条款）：页面留言与文章评论同一套异步发送，绝不阻塞响应；
+    // pre 模式的「待审核」文案由 pending 标记驱动
     crate::mailer::spawn_comment_notification(
         &state,
         &headers,
@@ -177,10 +181,11 @@ pub async fn create_page_comment(
             target_type: "page".to_string(),
             target_id: page_id,
             slug: slug.clone(),
-            author_name: created.author_name.clone(),
-            content: created.content.clone(),
-            is_reply: created.parent_id.is_some(),
+            author_name: created.comment.author_name.clone(),
+            content: created.comment.content.clone(),
+            is_reply: created.comment.parent_id.is_some(),
+            pending: created.status == COMMENT_STATUS_PENDING,
         },
     );
-    Ok((StatusCode::CREATED, Json(created)))
+    Ok((StatusCode::CREATED, Json(created.comment)))
 }

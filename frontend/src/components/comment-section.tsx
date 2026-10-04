@@ -8,8 +8,9 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { api, ApiError, errorMessage } from "@/lib/api"
+import { loadSiteSettings } from "@/lib/site"
 import { formatRelative } from "@/lib/utils"
-import type { CommentPub } from "@/lib/types"
+import type { CommentModeration, CommentPub } from "@/lib/types"
 
 const AUTHOR_KEY = "reedblog_comment_author"
 const EMAIL_KEY = "reedblog_comment_email"
@@ -88,6 +89,11 @@ export function CommentSection({
    * 前端按 parent_id 分组后自动落回原楼层。成功返回 true（供回复表单关闭）。
    * website 为蜜罐字段（契约「反滥用」）：真人为空，机器人自动填充 → 后端 201 假成功；
    * 429/403 的提示文案固定为友好话术，不回显后端规则细节。
+   *
+   * 提交结果提示按站点设置 comment_moderation 区分（契约「评论审核方式」）：
+   * post=先发后审 → 立即插入列表 + 「发表成功」；pre=先审后发 → **不插入列表**
+   * （待审评论不会出现在公开列表里），提示「已提交，待审核通过后显示」。
+   * 设置读取失败按 post 兜底（与提交同源接口，正常不会单独失败）。
    */
   const submitComment = async (
     content: string,
@@ -100,6 +106,9 @@ export function CommentSection({
       return false
     }
     try {
+      const moderation: CommentModeration = await loadSiteSettings()
+        .then((s) => s.comment_moderation)
+        .catch(() => "post")
       const create = target === "page" ? api.createPageComment : api.createComment
       const created = await create(slug, {
         author_name: authorName.trim(),
@@ -110,9 +119,16 @@ export function CommentSection({
       })
       localStorage.setItem(AUTHOR_KEY, authorName.trim())
       localStorage.setItem(EMAIL_KEY, email.trim())
-      setComments((prev) => [...(prev ?? []), created])
       setReplyTo(null)
-      toast.success(isReply ? `回复发表成功` : `${noun}发表成功`)
+      if (moderation === "pre") {
+        // 先审后发：不插列表（pending 不在公开列表中），提示待审核
+        toast.success(
+          isReply ? "回复已提交，待审核通过后显示" : `${noun}已提交，待审核通过后显示`,
+        )
+      } else {
+        setComments((prev) => [...(prev ?? []), created])
+        toast.success(isReply ? `回复发表成功` : `${noun}发表成功`)
+      }
       return true
     } catch (err) {
       if (err instanceof ApiError && err.code === "too_many_requests") {

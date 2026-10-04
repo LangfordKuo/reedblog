@@ -7,7 +7,8 @@
 //! - 进程内实时生效：读取路径每次请求查库，修改后无需重启；
 //! - 时间戳沿用全库 RFC3339 UTC 文本惯例（updated_at）；
 //! - 旧库升级（表存在但缺行）时按键回退默认值：title/subtitle 回退 config.toml [site]
-//!   （即 Runtime 缓存值），base_url 回退 config.toml [server] base_url，per_page 回退 10。
+//!   （即 Runtime 缓存值），base_url 回退 config.toml [server] base_url，per_page 回退 10，
+//!   comment_moderation 回退 post（先发后审，与旧版本行为一致）。
 
 use sqlx::{AnyConnection, AnyPool, Row};
 
@@ -28,6 +29,12 @@ pub const KEY_OG_IMAGE: &str = "og_image";
 pub const KEY_COMMENT_BLOCKED_KEYWORDS: &str = "comment_blocked_keywords";
 /// 评论正文 URL 数上限（契约「反滥用」条款；0=不限制；仅后台可读）
 pub const KEY_COMMENT_MAX_LINKS: &str = "comment_max_links";
+/// 评论审核方式（契约「评论审核方式」条款，2026-10-04 新增；**公开可读**）
+pub const KEY_COMMENT_MODERATION: &str = "comment_moderation";
+
+/// comment_moderation 取值（契约「评论审核方式」条款）
+pub const MODERATION_POST: &str = "post"; // 先发后审（默认）：新评论创建即 approved
+pub const MODERATION_PRE: &str = "pre"; // 先审后发：新评论创建为 pending，审核通过才公开
 
 /// per_page 默认值（与契约总则分页默认一致）
 pub const DEFAULT_PER_PAGE: i64 = 10;
@@ -54,6 +61,22 @@ pub struct SiteSettings {
     pub comment_blocked_keywords: String,
     /// 评论正文 URL 数上限（0=不限制；**仅后台可读写，公开接口不返回**）
     pub comment_max_links: i64,
+    /// 评论审核方式：post=先发后审（默认，创建即 approved）/ pre=先审后发（创建为 pending）
+    pub comment_moderation: String,
+}
+
+impl SiteSettings {
+    /// 新评论的初始审核状态——**审核方式判定的唯一实现**（契约「评论审核方式」条款）：
+    /// 文章评论与页面留言共用同一创建管线（helpers::create_comment_pipeline），
+    /// 只在该管线内调用本方法；两条链路不得各自判定。
+    /// `pre` → `"pending"`（默认不公开）；其余（含存量非法值，load 已兜底为 post）→ `"approved"`。
+    pub fn new_comment_status(&self) -> &'static str {
+        if self.comment_moderation == MODERATION_PRE {
+            "pending"
+        } else {
+            "approved"
+        }
+    }
 }
 
 /// upsert（连接版）：先 UPDATE，rows_affected=0 再 INSERT。
@@ -131,7 +154,7 @@ pub async fn save(pool: &AnyPool, s: &SiteSettings) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
-fn to_pairs(s: &SiteSettings) -> [(&'static str, String); 10] {
+fn to_pairs(s: &SiteSettings) -> [(&'static str, String); 11] {
     [
         (KEY_TITLE, s.title.clone()),
         (KEY_SUBTITLE, s.subtitle.clone()),
@@ -146,6 +169,7 @@ fn to_pairs(s: &SiteSettings) -> [(&'static str, String); 10] {
             s.comment_blocked_keywords.clone(),
         ),
         (KEY_COMMENT_MAX_LINKS, s.comment_max_links.to_string()),
+        (KEY_COMMENT_MODERATION, s.comment_moderation.clone()),
     ]
 }
 
@@ -170,6 +194,11 @@ pub async fn load(pool: &AnyPool, state: &AppState) -> ApiResult<SiteSettings> {
         .and_then(|v| v.trim().parse::<i64>().ok())
         .map(|v| v.clamp(0, MAX_COMMENT_LINKS_LIMIT))
         .unwrap_or(DEFAULT_COMMENT_MAX_LINKS);
+    // 评论审核方式：旧库无该键 / 存量非法值一律按默认 post（先发后审，行为与旧版本一致）
+    let comment_moderation = get(KEY_COMMENT_MODERATION)
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| v == MODERATION_POST || v == MODERATION_PRE)
+        .unwrap_or_else(|| MODERATION_POST.to_string());
 
     Ok(SiteSettings {
         title: get(KEY_TITLE)
@@ -184,6 +213,7 @@ pub async fn load(pool: &AnyPool, state: &AppState) -> ApiResult<SiteSettings> {
         og_image: get(KEY_OG_IMAGE).unwrap_or_default(),
         comment_blocked_keywords: get(KEY_COMMENT_BLOCKED_KEYWORDS).unwrap_or_default(),
         comment_max_links,
+        comment_moderation,
     })
 }
 
@@ -201,6 +231,7 @@ pub fn install_defaults(title: &str, subtitle: &str, base_url: &str) -> SiteSett
         og_image: String::new(),
         comment_blocked_keywords: String::new(),
         comment_max_links: DEFAULT_COMMENT_MAX_LINKS,
+        comment_moderation: MODERATION_POST.to_string(),
     }
 }
 
@@ -239,6 +270,12 @@ pub fn validate(s: &SiteSettings) -> ApiResult<()> {
     if !(0..=MAX_COMMENT_LINKS_LIMIT).contains(&s.comment_max_links) {
         return Err(ApiError::validation(
             "评论链接数上限 comment_max_links 必须是 0~100 的整数（0=不限制）",
+        ));
+    }
+    // 评论审核方式（契约「评论审核方式」条款）：只接受 post / pre 两个枚举值
+    if s.comment_moderation != MODERATION_POST && s.comment_moderation != MODERATION_PRE {
+        return Err(ApiError::validation(
+            "评论审核方式 comment_moderation 必须是 post（先发后审）或 pre（先审后发）",
         ));
     }
     if !s.base_url.is_empty() {
@@ -281,6 +318,7 @@ mod tests {
             og_image: String::new(),
             comment_blocked_keywords: String::new(),
             comment_max_links: DEFAULT_COMMENT_MAX_LINKS,
+            comment_moderation: MODERATION_POST.to_string(),
         }
     }
 
@@ -357,6 +395,33 @@ mod tests {
         let mut s = base();
         s.comment_blocked_keywords = "词".repeat(MAX_BLOCKED_KEYWORDS_CHARS + 1);
         assert!(validate(&s).is_err(), "超长关键词黑名单应被拒绝");
+
+        // 评论审核方式：只接受 post / pre（含空串与大小写变体）
+        for bad in ["", "POST", "before", "pending", " post "] {
+            let mut s = base();
+            s.comment_moderation = bad.to_string();
+            assert!(
+                validate(&s).is_err(),
+                "非法 comment_moderation 应被拒绝: {bad:?}"
+            );
+        }
+        for ok in [MODERATION_POST, MODERATION_PRE] {
+            let mut s = base();
+            s.comment_moderation = ok.to_string();
+            assert!(validate(&s).is_ok(), "合法 comment_moderation 应通过: {ok}");
+        }
+    }
+
+    /// 审核方式判定的唯一实现（契约「评论审核方式」）：pre → pending，其余（post/非法存量）→ approved
+    #[test]
+    fn new_comment_status_follows_moderation() {
+        let mut s = base();
+        assert_eq!(s.new_comment_status(), "approved", "默认先发后审");
+        s.comment_moderation = MODERATION_PRE.to_string();
+        assert_eq!(s.new_comment_status(), "pending");
+        // 非 post/pre 的存量值按 approved 兜底（load 已保证正常路径不会出现）
+        s.comment_moderation = "weird".to_string();
+        assert_eq!(s.new_comment_status(), "approved");
     }
 
     #[test]
@@ -372,5 +437,7 @@ mod tests {
         // 反滥用默认值（契约「反滥用」）：黑名单为空、链接数上限默认 3
         assert_eq!(s.comment_blocked_keywords, "");
         assert_eq!(s.comment_max_links, DEFAULT_COMMENT_MAX_LINKS);
+        // 评论审核方式默认先发后审（契约「评论审核方式」）
+        assert_eq!(s.comment_moderation, MODERATION_POST);
     }
 }

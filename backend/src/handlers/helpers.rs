@@ -722,7 +722,7 @@ pub async fn resolve_comment_parent(
         return Err(ApiError::validation("不能回复其他目标下的评论"));
     }
     if row.get::<String, _>("status") != "approved" {
-        return Err(ApiError::validation("不能回复已隐藏的评论"));
+        return Err(ApiError::validation("不能回复未公开的评论"));
     }
 
     let requested_author = row.get::<String, _>("author_name");
@@ -817,13 +817,27 @@ pub fn honeypot_comment(req: &CreateCommentRequest) -> CommentPub {
     }
 }
 
+/// comments.status 取值（契约「评论审核方式」条款，2026-10-04 新增 pending）
+pub const COMMENT_STATUS_APPROVED: &str = "approved";
+pub const COMMENT_STATUS_HIDDEN: &str = "hidden";
+pub const COMMENT_STATUS_PENDING: &str = "pending";
+
+/// 评论创建管线的返回值：响应体（CommentPub）+ 落库时的初始审核状态
+pub struct CreatedComment {
+    pub comment: CommentPub,
+    /// 落库时的 status（post 模式 approved / pre 模式 pending）——仅供邮件通知区分文案
+    pub status: &'static str,
+}
+
 /// POST 评论共用创建管线（文章 `/api/posts/:slug/comments` 与留言板
 /// `/api/pages/:slug/comments` 两处调用，行为完全一致）：
 /// 必填校验 → 父评论校验与两级归一化（422 先于钩子）→ comment.before_create 钩子链
 /// （block → 403 comment_blocked；ctx 带归一化后的 parent_id/reply_to_id）→
-/// 插入（先发后审：创建即 approved）→ 返回 CommentPub。
+/// 插入（初始 status 由站点设置 comment_moderation 决定：post 模式 approved、
+/// pre 模式 pending；判定唯一实现 = settings::SiteSettings::new_comment_status()）→
+/// 返回 CreatedComment。
 /// 注意：反滥用闸门（蜜罐/黑名单/限流）在调用本管线**之前**由 handler 执行
-/// （见 check_comment_gate），本管线内不含反滥用逻辑。
+/// （见 check_comment_gate），本管线内不含反滥用逻辑；审核方式不改变闸门行为。
 pub async fn create_comment_pipeline(
     state: &AppState,
     pool: &AnyPool,
@@ -833,7 +847,7 @@ pub async fn create_comment_pipeline(
     slug: &str,
     req: CreateCommentRequest,
     blocked_default_reason: &str,
-) -> ApiResult<CommentPub> {
+) -> ApiResult<CreatedComment> {
     let author_name = req.author_name.trim();
     let content = req.content.trim();
     if author_name.is_empty() {
@@ -892,18 +906,25 @@ pub async fn create_comment_pipeline(
         .map(|e| e.trim().to_string())
         .filter(|e| !e.is_empty());
 
+    // 初始审核状态（契约「评论审核方式」）：唯一判定点，文章评论与页面留言共用。
+    // 在闸门与钩子之后读取——反滥用/插件行为不因模式改变，仅决定本次落库写入的 status。
+    let status = crate::settings::load(pool, state)
+        .await?
+        .new_comment_status();
+
     let created_at = crate::state::now_rfc3339();
     let mut conn = pool.acquire().await?;
     sqlx::query(
         "INSERT INTO comments (post_id, target_type, author_name, email, content, status, \
          parent_id, reply_to_id, created_at) \
-         VALUES (?, ?, ?, ?, ?, 'approved', ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(target_id)
     .bind(target_type)
     .bind(&author_name)
     .bind(email.as_deref())
     .bind(&content)
+    .bind(status)
     .bind(parent.parent_id)
     .bind(parent.reply_to_id)
     .bind(&created_at)
@@ -911,14 +932,17 @@ pub async fn create_comment_pipeline(
     .await?;
     let id = last_insert_id_on(&mut conn, db_type).await?;
 
-    Ok(CommentPub {
-        id,
-        author_name,
-        content,
-        created_at,
-        parent_id: parent.parent_id,
-        reply_to_id: parent.reply_to_id,
-        reply_to_name: parent.reply_to_name,
+    Ok(CreatedComment {
+        comment: CommentPub {
+            id,
+            author_name,
+            content,
+            created_at,
+            parent_id: parent.parent_id,
+            reply_to_id: parent.reply_to_id,
+            reply_to_name: parent.reply_to_name,
+        },
+        status,
     })
 }
 

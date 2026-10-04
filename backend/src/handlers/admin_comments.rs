@@ -49,14 +49,24 @@ fn row_to_comment_admin(r: &sqlx::any::AnyRow) -> CommentAdmin {
     }
 }
 
+/// status 校验（契约「评论审核方式」2026-10-04 扩展）：approved / hidden / pending 三选一；
+/// 列表过滤与 PUT 改状态共用同一处校验
 fn validate_comment_status(s: &str) -> ApiResult<()> {
-    if s != "approved" && s != "hidden" {
-        return Err(ApiError::validation("status 必须是 approved 或 hidden"));
+    if !matches!(
+        s,
+        super::helpers::COMMENT_STATUS_APPROVED
+            | super::helpers::COMMENT_STATUS_HIDDEN
+            | super::helpers::COMMENT_STATUS_PENDING
+    ) {
+        return Err(ApiError::validation(
+            "status 必须是 approved、hidden 或 pending",
+        ));
     }
     Ok(())
 }
 
 /// GET /api/admin/comments?status&post_id&page&per_page → 分页 [CommentAdmin]，created_at DESC
+/// （status 过滤支持 pending，见契约「评论审核方式」）
 pub async fn admin_list_comments(
     State(state): State<AppState>,
     headers: HeaderMap,

@@ -41,7 +41,8 @@ CommentPub   = {id, author_name, content, created_at,
                // reply_to_id=被回复的中间楼层 id（仅「回复的回复」非 null）；
                // reply_to_name=被回复人作者名（JOIN 冗余，reply_to_id 为 null 时同为 null）
 CommentAdmin = {id, post_id, post_title, author_name, email|null, content,
-                status: "approved"|"hidden", created_at,
+                status: "approved"|"hidden"|"pending",  // pending 为 2026-10-04 评论审核方式新增
+                created_at,
                 target_type: "post"|"page",   // 2026-10-03 页面功能扩展，见「页面」
                 parent_id|null, reply_to_id|null, reply_to_name|null,
                 reply_count: int}             // 2026-10-03 嵌套评论新增：直接子回复条数
@@ -67,7 +68,11 @@ PostRevisionSummary = {id, post_id, title, content_chars: int, created_at}
 PostRevision        = PostRevisionSummary + {content_md, excerpt}
                // 单条完整修订（含正文，供前端差异对比）
 SiteSettingsPublic = {title, subtitle, description, icp_number, footer_text, per_page: int,
-                      og_image: string}   // og_image：2026-10-04 SEO 条款新增，空串=未设置
+                      og_image: string,
+                      comment_moderation: "post"|"pre"}
+               // og_image：2026-10-04 SEO 条款新增，空串=未设置
+               // comment_moderation：2026-10-04 评论审核方式新增（默认 "post"=先发后审）；
+               // **公开返回**（前台表单据此提示「发表成功」还是「待审核」），见「评论审核方式」
 SiteSettingsAdmin  = SiteSettingsPublic + {base_url,
                       comment_blocked_keywords: string, comment_max_links: int}
                // base_url 为敏感字段，公开接口不返回；
@@ -75,7 +80,8 @@ SiteSettingsAdmin  = SiteSettingsPublic + {base_url,
                // SiteSettingsPublic 绝不返回这两项（见「反滥用」）
 SiteStats      = {post_count: int, comment_count: int, installed_at: string,
                   total_views: int}
-               // 2026-10-03 组件系统新增：published 文章数 / approved 评论数（含页面留言）/
+               // 2026-10-03 组件系统新增：published 文章数 / approved 评论数（含页面留言；
+               // 2026-10-04 评论审核方式补：pending 与 hidden 同口径，不计入）/
                // 安装时间（users 表最早 created_at，RFC3339；取不到时为空串）——站点信息组件数据源
                // 2026-10-04 浏览量新增：total_views = 所有文章 view_count 之和（posts 全表
                // SUM，含草稿——历史累计口径），见「浏览量与点赞」
@@ -157,9 +163,11 @@ SiteStats.post_count、归档计数）同口径。详见「文章置顶与定时
 - `GET /api/posts/:slug/comments` → `[CommentPub]`（仅 approved 且线程可见，按时间 ASC, id ASC；
   仍为平铺数组，两级树由前端按 parent_id 自行组装，见「评论回复」）
   - 评论目标可见性同文章：文章未公开可见（含未到点的 scheduled）→ 404 `not_found`
+  - **pending 评论一律不出现**（与 hidden 同口径），见「评论审核方式」
 - `POST /api/posts/:slug/comments` → 201 `CommentPub`
   - body: `{author_name, email?, content, parent_id?, website?}`；必填校验 422 `validation_error`
-  - 默认先发后审：创建即 approved
+  - 审核状态由站点设置 `comment_moderation` 决定（2026-10-04 新增，见「评论审核方式」）：
+    `post`（默认）= 创建即 `approved`（先发后审）；`pre` = 创建为 `pending`（先审后发，默认不公开）
   - 带 parent_id 时为回复（楼中楼）：校验与两级归一化见「评论回复」
   - **反滥用**（2026-10-04 新增，见「反滥用」）：限流 429 / 蜜罐假成功 / 黑名单 403
 - `GET /api/tags` → `[Tag]`（post_count 只统计公开可见文章，见「公开可见性」）
@@ -278,29 +286,35 @@ dateModified/author/publisher/mainEntityOfPage/url/wordCount/可选 image；页�
   `comment_blocked_keywords`（评论关键词黑名单，2026-10-04 反滥用条款新增，选填，
   换行或逗号分隔、大小写不敏感）、`comment_max_links`（评论正文 URL 数上限，
   2026-10-04 反滥用条款新增，整数 0~100，0=不限制，默认 3）——
-  后两项**仅后台可读写，公开接口不返回**（见「反滥用」）
+  后两项**仅后台可读写，公开接口不返回**（见「反滥用」）；
+  `comment_moderation`（评论审核方式，2026-10-04 新增，取值 `post`/`pre`，默认 `post`）
+  ——**公开可读**（前台表单需要据此提示提交结果，见「评论审核方式」）
 - 默认值：**安装时写入**——title/subtitle 取安装请求 `site.title`/`site.subtitle`，
   base_url 初始值取 config.toml `[server] base_url`（可为空），per_page=10，其余为空串；
   升级安装（表存在但无行）时按键回退同款默认值（title/subtitle 回退 config.toml `[site]`）
 - 生效方式：进程内实时（读取路径每次请求查库），**修改后无需重启**
 - `GET /api/site/settings` → `SiteSettingsPublic`（公开、无需鉴权；供前台头部/页脚/分页默认值渲染）
-  - **不含 base_url 等敏感字段**；不进未安装门禁白名单，未安装 → 503 `not_installed`
+  - **不含 base_url 等敏感字段**；`comment_moderation` 公开返回；不进未安装门禁白名单，未安装 → 503 `not_installed`
 - `GET /api/admin/site/settings`（Bearer）→ `SiteSettingsAdmin`（全部字段，含 base_url）
 - `PUT /api/admin/site/settings`（Bearer）→ 200 `SiteSettingsAdmin`（更新后的完整设置）
   - body: `{title, subtitle?, description?, icp_number?, footer_text?, per_page, base_url?, og_image?,
-    comment_blocked_keywords?, comment_max_links?}`
-    （可选字段缺失/null 视为空串；全量更新语义；`comment_max_links` 缺失/null 回退默认值 3）
+    comment_blocked_keywords?, comment_max_links?, comment_moderation?}`
+    （可选字段缺失/null 视为空串；全量更新语义；`comment_max_links` 缺失/null 回退默认值 3；
+    `comment_moderation` 缺失/null 回退默认值 `post`）
   - 校验（失败 → 422 `validation_error`）：
     - title trim 后非空，≤255 字符；subtitle ≤255；description ≤1000；icp_number ≤100；
       footer_text ≤1000；base_url ≤500；og_image ≤500
     - per_page 整数 1~100；comment_max_links 整数 0~100（0=不限制）
     - comment_blocked_keywords ≤2000 字符
+    - **comment_moderation 只接受 `post` 或 `pre`**（其余值 → 422 `validation_error`）
     - base_url 非空时必须是合法绝对 URL 且 scheme 为 http/https
     - og_image 空串允许（=清除）；非空时必须以 `/api/uploads/` 开头或
       以 `http://`/`https://` 开头（禁止 `javascript:` 等其它 scheme）
   - `comment_blocked_keywords` / `comment_max_links` **仅存在于管理端响应**，
     `GET /api/site/settings`（SiteSettingsPublic）不返回（防爬虫拿到规则调参）
   - 未登录/token 无效 → 401 `unauthorized`
+  - 旧库升级（settings 表缺 `comment_moderation` 键）时按键回退默认值 `post`，
+    行为与旧版本一致（见「评论审核方式」）
 - 联动读取（改为读站点设置而非硬编码/config.toml）：
   - `GET /api/site` 的 title/subtitle
   - `GET /api/posts`、`GET /api/search` 未传 per_page 时的默认值
@@ -335,7 +349,8 @@ dateModified/author/publisher/mainEntityOfPage/url/wordCount/可选 image；页�
 - `GET /api/pages/:slug/comments` → `[CommentPub]`（仅 approved 且线程可见，时间 ASC, id ASC；
   形状与线程规则同文章评论，见「评论回复」）
 - `POST /api/pages/:slug/comments` → 201 `CommentPub`，body 与文章评论相同
-  `{author_name, email?, content, parent_id?, website?}`；必填校验 422 `validation_error`；先发后审（创建即 approved）；
+  `{author_name, email?, content, parent_id?, website?}`；必填校验 422 `validation_error`；
+  审核状态与文章评论同口径（由 `comment_moderation` 决定，见「评论审核方式」）；
   comment.before_create 钩子链同样生效（ctx.post_slug = 页面 slug）；
   回复（parent_id）与文章评论同一套机制：校验/两级归一化/连带删除/隐藏线程过滤见「评论回复」；
   **反滥用与文章评论完全同口径**（见「反滥用」）：限流按「IP + 目标」分别计数，
@@ -450,7 +465,8 @@ docs/extensibility-contract.md「主题组件」与 docs/theme-development.md「
   校验（失败 → 422 `validation_error`，带明确 message）：
   - 父评论必须存在（「父评论不存在」）
   - 父评论必须与本次请求同目标：target_type 与目标 id 均一致（「不能回复其他目标下的评论」）
-  - 父评论 status 必须为 approved（「不能回复已隐藏的评论」）
+  - 父评论 status 必须为 approved（「不能回复未公开的评论」；hidden 与 pending 同口径，
+    见「评论审核方式」——pending 父评论不可回复，因其对访客同样不可见）
 - comment.before_create 钩子对回复同样生效：入参 ctx 新增 `parent_id`、`reply_to_id`
   （INT，0 表示无；见 docs/extensibility-contract.md）；block 同样短路 → 403 `comment_blocked`
 - 公开列表（`GET /api/posts/:slug/comments` 与 `GET /api/pages/:slug/comments`）：
@@ -470,6 +486,42 @@ docs/extensibility-contract.md「主题组件」与 docs/theme-development.md「
   - **连带删除**：`DELETE /api/admin/comments/:id` 删除顶级评论时连带删除其全部子回复
     （仍 204）；删除子回复只删自身；id 不存在 → 404 `not_found`
   - 隐藏顶级评论（`PUT` status=hidden）不改子回复 status，仅前台整线程过滤
+
+## 评论审核方式（先发后审 / 先审后发，2026-10-04 新增）
+
+站点设置 `comment_moderation` 决定**新评论**的初始审核状态，后台「站点管理」页可切换：
+
+| 取值 | 名称 | 新评论初始 status | 语义 |
+| --- | --- | --- | --- |
+| `post` | 先发后审（默认） | `approved` | 立即公开，出事再在后台隐藏（= 本条款之前的现状） |
+| `pre` | 先审后发 | `pending` | 默认不公开，后台「通过」（PUT status=approved）后才公开 |
+
+- `comments.status` 取值扩展为 `approved` / `hidden` / `pending`（仍为 TEXT 列，**无需迁移**）
+- **公开可见性（hidden 与 pending 同口径）**：`pending` 评论
+  - 不出现在 `GET /api/posts/:slug/comments`、`GET /api/pages/:slug/comments`
+  - 不参与文章的 `comment_count`（列表/详情/`order=hot`）
+  - 不计入 `SiteStats.comment_count`
+  - 不做「待审核」防枚举提示：公开接口对 pending 的处理与 hidden 完全一致，不暴露其存在
+- **楼中楼**：`pre` 模式下回复也创建为 `pending`；顶级评论非 `approved` 时其回复自然不公开
+  （沿用既有线程可见性过滤，**不新增逻辑**）；父评论恢复 approved 后，子回复仍需自身为
+  approved 才公开（`pre` 模式下即需各自通过审核）
+- **反滥用优先级不变**：蜜罐 / 关键词黑名单 / 链接数 / 限流**先于**审核状态判定，
+  且行为不因模式改变（蜜罐仍 201 假成功不落库、黑名单仍 403、限流仍 429）；
+  审核状态只在**通过闸门、插件钩子链之后、落库时**决定（判定唯一实现见下）
+- **插件钩子** `comment.before_create` 不受影响（仍可 block → 403 `comment_blocked`）
+- **邮件通知**：仍在新评论创建成功时发送；`pre` 模式下主题/正文标明「待审核」并给出
+  后台审核链接（不发「已发表」口径，见「邮件通知」）；后台「通过」时**不额外发邮件**
+- **切换模式不批量改动历史数据**：已存在的 approved/hidden/pending 保持原状，
+  设置只影响切换之后新建的评论
+- **不加 `SiteStats.pending_comments`**：待审数量通过管理接口
+  `GET /api/admin/comments?status=pending` 查询即可（前台不需要该数字，公开统计也
+  不应暴露待审存在），避免为一个纯后台数字扩展公开响应形状
+- **判定唯一实现**：文章评论与页面留言共用同一创建管线
+  （`helpers::create_comment_pipeline`），初始 status 由
+  `settings::SiteSettings::new_comment_status()` 单点产出（`pre` → `"pending"`，
+  其余一律 `"approved"`）——两条链路不得各自判定
+- 后台管理接口：列表支持 `status=pending`、`PUT` 允许把 status 改为
+  `approved|hidden|pending`（见「管理接口-评论」）
 
 ## 文章置顶与定时发布（2026-10-03 新增）
 
@@ -777,6 +829,10 @@ docs/extensibility-contract.md「主题组件」与 docs/theme-development.md「
 评论/留言创建：**蜜罐 → 关键词/链接数（403）→ 限流（429）→ 正常落库**
 （此后才走 comment.before_create 钩子链与 SMTP 通知，两者行为不变）。
 
+审核状态（2026-10-04 评论审核方式新增）**不参与也不改变上述顺序**：`comment_moderation`
+只决定落库时写入的初始 status（`approved` 或 `pending`），蜜罐/黑名单/限流在
+`pending` 模式下行为与 `post` 模式完全一致（见「评论审核方式」）。
+
 ### 后台登录失败退避
 
 - 维度：**同 IP + 同用户名**（IP 取值同上）
@@ -848,10 +904,14 @@ docs/extensibility-contract.md「主题组件」与 docs/theme-development.md「
 `post_id`/`post_title` 语义扩展为「目标 id / 目标标题」，见「页面」；
 2026-10-03 嵌套评论扩展：响应新增 parent_id/reply_to_id/reply_to_name/reply_count，
 删除顶级评论连带删除子回复，见「评论回复」）：
-- `GET /api/admin/comments?status=<approved|hidden|all>&post_id=&page&per_page` → 分页 `[CommentAdmin]`，created_at DESC（排序不变，父子不强制相邻；时间戳秒精度，同秒行以 id DESC 兜底保证确定性）
+- `GET /api/admin/comments?status=<approved|hidden|pending|all>&post_id=&page&per_page` → 分页 `[CommentAdmin]`，created_at DESC（排序不变，父子不强制相邻；时间戳秒精度，同秒行以 id DESC 兜底保证确定性）
   - `post_id` 过滤仅匹配来源为文章的评论（target_type='post' 且目标 id 相等）
+  - `status=pending` 为 2026-10-04 评论审核方式新增（待审列表；非法值 → 422 `validation_error`）
 - `PUT /api/admin/comments/:id` body `{status}` → `CommentAdmin`
-  （隐藏顶级评论时前台整线程过滤，子回复 status 不连带变更）
+  - status 允许 `approved|hidden|pending`（2026-10-04 扩展；非法值 → 422 `validation_error`）
+  - 后台「通过」待审评论 = `PUT {status:"approved"}`（**已有端点，不新增 approve 端点**；
+    通过时不发额外邮件，见「评论审核方式」）
+  - 隐藏顶级评论时前台整线程过滤，子回复 status 不连带变更
 - `DELETE /api/admin/comments/:id` → 204（顶级评论**连带删除其全部子回复**；子回复只删自身）
 
 图片上传（2026-10-03 新增）：
@@ -934,6 +994,12 @@ docs/extensibility-contract.md「主题组件」与 docs/theme-development.md「
   - 评论者名、评论内容
   - 后台评论管理链接 `{base}/admin/comments`
 - 主题：`[{站点名称}] 新评论：{标题}` / `[{站点名称}] 新回复：{标题}`
+- **先审后发模式**（`comment_moderation=pre`，2026-10-04 新增，见「评论审核方式」）：
+  通知仍在评论创建时发送（**不延迟到审核通过**），但主题与正文改为「待审核」口径——
+  - 主题：`[{站点名称}] 新评论（待审核）：{标题}` / `[{站点名称}] 新回复（待审核）：{标题}`
+  - 正文首行明示「需审核通过后才对访客可见」，不发「已发表/已公开」口径的文案；
+    审核链接指向 `{base}/admin/comments?status=pending`
+  - 后台「通过」（PUT status=approved）**不额外发邮件**
 
 ### 投递语义（重要）
 

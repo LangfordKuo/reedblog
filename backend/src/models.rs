@@ -273,6 +273,9 @@ pub struct SiteSettingsPublic {
     pub per_page: i64,
     /// 分享卡片兜底图（契约「SEO / 分享元信息」；公开可读，空串=未设置）
     pub og_image: String,
+    /// 评论审核方式（契约「评论审核方式」条款，2026-10-04 新增）：
+    /// "post"=先发后审（默认）/ "pre"=先审后发；**公开返回**（前台表单据此提示提交结果）
+    pub comment_moderation: String,
 }
 
 /// GET/PUT /api/admin/site/settings 响应（契约 SiteSettingsAdmin = Public + base_url
@@ -298,6 +301,7 @@ impl From<&crate::settings::SiteSettings> for SiteSettingsPublic {
             footer_text: s.footer_text.clone(),
             per_page: s.per_page,
             og_image: s.og_image.clone(),
+            comment_moderation: s.comment_moderation.clone(),
         }
     }
 }
@@ -525,6 +529,9 @@ pub struct SiteSettingsBody {
     /// 评论链接数上限（可选；缺失/null 回退默认值 3；0=不限制）
     #[serde(default)]
     pub comment_max_links: Option<i64>,
+    /// 评论审核方式（可选；缺失/null 回退默认值 post；只接受 post/pre，校验见 settings::validate）
+    #[serde(default)]
+    pub comment_moderation: Option<String>,
 }
 
 impl SiteSettingsBody {
@@ -544,6 +551,12 @@ impl SiteSettingsBody {
             comment_max_links: self
                 .comment_max_links
                 .unwrap_or(crate::settings::DEFAULT_COMMENT_MAX_LINKS),
+            // 缺失/null → 默认 post（全量更新语义）；显式给值（含空串）一并交给
+            // settings::validate 做枚举校验（非法 → 422），不在此处静默纠正
+            comment_moderation: self
+                .comment_moderation
+                .map(|v| v.trim().to_string())
+                .unwrap_or_else(|| crate::settings::MODERATION_POST.to_string()),
         }
     }
 }

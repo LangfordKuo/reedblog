@@ -16,7 +16,15 @@ export interface SiteSettings {
   per_page: number
   /** 分享卡片兜底图（契约「SEO / 分享元信息」；空串=未设置） */
   og_image: string
+  /** 评论审核方式（契约「评论审核方式」）：post=先发后审（默认）/ pre=先审后发；公开返回 */
+  comment_moderation: CommentModeration
 }
+
+/**
+ * 评论审核方式（契约「评论审核方式」，2026-10-04 新增）：
+ * post=先发后审（新评论立即公开）；pre=先审后发（新评论待审核，后台通过后才公开）
+ */
+export type CommentModeration = "post" | "pre"
 
 /** GET/PUT /api/admin/site/settings 响应（契约 SiteSettingsAdmin） */
 export interface SiteSettingsAdmin extends SiteSettings {
@@ -41,6 +49,8 @@ export interface SiteSettingsSaveBody {
   comment_blocked_keywords?: string
   /** 评论正文 URL 数上限（0=不限制，缺省回退 3） */
   comment_max_links?: number
+  /** 评论审核方式（契约「评论审核方式」；缺省回退 post） */
+  comment_moderation?: CommentModeration
 }
 
 /** SMTP TLS 模式（契约「邮件通知」条款） */
@@ -189,7 +199,8 @@ export interface CommentPub {
   reply_to_name: string | null
 }
 
-export type CommentStatus = "approved" | "hidden"
+/** pending=待审核（契约「评论审核方式」新增；与 hidden 同口径不公开） */
+export type CommentStatus = "approved" | "hidden" | "pending"
 
 /** 评论来源：文章评论 / 页面留言（契约 2026-10-03「页面」条款扩展） */
 export type CommentTargetType = "post" | "page"

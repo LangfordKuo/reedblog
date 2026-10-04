@@ -34,7 +34,8 @@ pub async fn site_info(State(state): State<AppState>) -> Json<SiteInfo> {
 /// GET /api/site/stats → SiteStats（契约「站点设置」2026-10-03 组件系统新增；
 /// total_views 为 2026-10-04「浏览量与点赞」新增）：
 /// 公开可见文章数（published + 到点的 scheduled，契约「文章置顶与定时发布」可见性口径）/
-/// approved 评论数（含页面留言）/ 安装时间（users 表最早 created_at，取不到时空串）/
+/// approved 评论数（含页面留言；pending/hidden 均不计入——契约「评论审核方式」）/
+/// 安装时间（users 表最早 created_at，取不到时空串）/
 /// 所有文章浏览量之和（posts 全表 SUM，含草稿——历史累计口径）。
 /// 站点信息组件数据源；不进未安装门禁白名单，未安装 → 503。
 pub async fn site_stats(State(state): State<AppState>) -> ApiResult<Json<Value>> {

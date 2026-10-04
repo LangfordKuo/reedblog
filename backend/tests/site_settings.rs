@@ -119,7 +119,9 @@ async fn defaults_after_install_and_public_shape() {
             "footer_text": "",
             "per_page": 10,
             // 契约「SEO / 分享元信息」新增：分享卡片兜底图，默认为空
-            "og_image": ""
+            "og_image": "",
+            // 契约「评论审核方式」新增：默认先发后审（公开可读）
+            "comment_moderation": "post"
         })
     );
     // 敏感字段 base_url 绝不出现在公开响应
@@ -219,7 +221,9 @@ async fn update_settings_propagates_everywhere() {
             "og_image": "",
             // 反滥用（契约「反滥用」条款）：请求未带 → 黑名单空串、链接数回默认 3
             "comment_blocked_keywords": "",
-            "comment_max_links": 3
+            "comment_max_links": 3,
+            // 评论审核方式（契约「评论审核方式」）：请求未带 → 回默认 post
+            "comment_moderation": "post"
         })
     );
 
