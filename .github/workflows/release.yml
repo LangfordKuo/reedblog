@@ -125,6 +125,62 @@ jobs:
           AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
         run: cargo build --release --locked --target ${{ matrix.target }}
 
+      - name: Smoke test (Linux)
+        if: runner.os == 'Linux'
+        working-directory: backend
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          bin="target/${TARGET}/release/reedblog-backend"
+          file "$bin"
+          # 只有 x86_64 能在 runner 上原生跑；aarch64 走 QEMU 会拖慢流程，故只校验架构
+          if [ "$TARGET" != "x86_64-unknown-linux-gnu" ]; then
+            echo "非原生目标，跳过运行冒烟（架构已由 file 校验）"
+            exit 0
+          fi
+          smoke="$(mktemp -d)"
+          cp "$bin" "${smoke}/reedblog-backend"
+          cat > "${smoke}/config.toml" <<'EOF'
+          [server]
+          host = "127.0.0.1"
+          port = 3010
+          base_url = ""
+
+          [database]
+          db_type = "sqlite"
+          sqlite_path = "reedblog.db"
+
+          [site]
+          title = "smoke"
+
+          [cors]
+          allowed_origins = []
+
+          [plugins]
+          dir = "plugins"
+
+          [themes]
+          dir = "themes"
+          active = "default"
+
+          [uploads]
+          dir = "uploads"
+          max_size_mb = 10
+          EOF
+          ( cd "$smoke" && exec ./reedblog-backend > serve.log 2>&1 ) &
+          srv=$!
+          code=""
+          for _ in $(seq 1 40); do
+            code="$(curl -s -o /tmp/smoke_body -w '%{http_code}' http://127.0.0.1:3010/api/site/settings || true)"
+            if [ -n "$code" ] && [ "$code" != "000" ]; then break; fi
+            sleep 0.5
+          done
+          echo "GET /api/site/settings -> $code $(cat /tmp/smoke_body 2>/dev/null || true)"
+          kill "$srv" 2>/dev/null || true
+          [ "$code" = "503" ] || { echo "冒烟失败：期望 503(not_installed)，实际 $code"; cat "${smoke}/serve.log"; exit 1; }
+
       - name: Package (Linux)
         if: runner.os == 'Linux'
         shell: bash
